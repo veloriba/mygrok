@@ -1,0 +1,16 @@
+# Binaries
+bin/
+mygrok
+mygrok-server
+
+# Go
+vendor/
+
+# OS
+.DS_Store
+*.swp
+
+# Local config
+.env
+config.toml
+config.mk

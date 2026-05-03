@@ -1,0 +1,6 @@
+# Server configuration template for Makefile
+# Copy this to config.mk and fill in your values
+SERVER_USER=your-user
+SERVER_HOST=your-vps.com
+DOMAIN=yourdomain.com
+TOKEN=your-secret-token
