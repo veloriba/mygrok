@@ -62,6 +62,25 @@ The recommended way to run client tunnels is Docker Compose: every tunnel is a c
     ```
     On air-gapped hosts, build once and transfer: `make docker-save` → `docker load -i mygrok-<ver>-<arch>.tar`.
 
+### Per-project tunnels: the `task` CLI
+
+For "one tunnel per project" setups, the `task` binary scaffolds and manages a
+self-contained `mygrok/` folder inside any project directory:
+
+```bash
+make task                                  # build bin/task (install: cp bin/task /usr/local/bin/mgrok-task)
+mgrok-task config set                     # one-time: store MYGROK_SERVER / MYGROK_TOKEN in ~/.config/mygrok/env
+mgrok-task add ~/dev/myapp --port 3000 --sub my-app
+mgrok-task add ~/dev/mygame --port 8123 --sub mygame --network proxy --local-host mygame
+mgrok-task up|down|status|logs ~/dev/myapp
+```
+
+`add` generates `<dir>/mygrok/docker-compose.yml` (project `mygrok-<sub>`,
+container `mygrok_<sub>`, `restart: unless-stopped`) and `<dir>/mygrok/.env`
+(server + token, mode 0600). `--network <name>` joins an existing docker
+network instead of `network_mode: host` (use `--local-host <container>` to
+target a service on that network).
+
 ### 3. Client Usage (bare binary)
 
 1.  **Configure environment**:
@@ -90,6 +109,7 @@ The recommended way to run client tunnels is Docker Compose: every tunnel is a c
 - `make docker-buildx DOCKER_REGISTRY=ghcr.io/veloriba`: Build linux/amd64+arm64 and push.
 - `make docker-save`: Export image tarball for offline transfer.
 - `make docker-up` / `docker-down` / `docker-status` / `docker-logs SERVICE=<name>`: Manage client tunnels from `deploy/docker/docker-compose.client.yml`.
+- `make task`: Build the `mgrok-task` CLI for per-project tunnel scaffolding.
 
 ## 🛠 Configuration
 

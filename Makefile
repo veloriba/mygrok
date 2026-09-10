@@ -11,12 +11,15 @@ SUDO_PWD ?=
 -include config.mk
 -include .env
 
-.PHONY: build build-server build-client clean server-install server-uninstall server-status cert-renew test run check-config win-client-build win-client-install win-client-uninstall win-client-status docker-build docker-buildx docker-save docker-up docker-down docker-status docker-logs
+.PHONY: build build-server build-client build-task clean server-install server-uninstall server-status cert-renew test run check-config win-client-build win-client-install win-client-uninstall win-client-status docker-build docker-buildx docker-save docker-up docker-down docker-status docker-logs task
 
 VERSION=$(shell cat VERSION)
 LDFLAGS=-ldflags "-X github.com/veloriba/mygrok/internal/version.Version=$(VERSION)"
 
-build: build-server build-client
+build: build-server build-client build-task
+
+build-task:
+	go build $(LDFLAGS) -o bin/mgrok-task cmd/task/main.go
 
 test:
 	go test -v ./...
@@ -101,6 +104,11 @@ docker-status:
 
 docker-logs:
 	docker compose -f $(DOCKER_DIR)/docker-compose.client.yml logs -f --tail 100 $(SERVICE)
+
+# Build the `mgrok-task` CLI (scaffold/manage per-project docker compose tunnels).
+# Install to your PATH: cp bin/mgrok-task /usr/local/bin/
+task:
+	go build $(LDFLAGS) -o bin/mgrok-task cmd/task/main.go
 
 
 # --- Windows host client deployment targets ---

@@ -18,6 +18,8 @@
 # from v4.29. On older versions use the default bridge network and add
 # `--local-host host.docker.internal` to each service command.
 
+name: mygrok
+
 services:
   # Example: expose local HTTP on port 3000 as https://api.example.com
   api:
