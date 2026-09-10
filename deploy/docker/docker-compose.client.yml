@@ -1,0 +1,43 @@
+# Recommended way to run mygrok client tunnels.
+#
+# Setup:
+#   cp .env.example .env   # fill in MYGROK_SERVER / MYGROK_TOKEN
+#   docker compose up -d
+#
+# One tunnel = one service:
+#   docker ps                  -> every proxy at a glance
+#   docker logs -f <service>   -> live logs
+#   docker compose restart <service>
+# Crashed tunnels come back automatically (restart: unless-stopped).
+#
+# The image is built on first `up` (or `make docker-build` in the repo root).
+# To reuse a prebuilt image instead, delete the `build:` block and tag it:
+#   docker load -i mygrok-<version>-<arch>.tar && docker tag mygrok:<tag> mygrok
+
+# Note for Docker Desktop (Windows/macOS): `network_mode: host` is supported
+# from v4.29. On older versions use the default bridge network and add
+# `--local-host host.docker.internal` to each service command.
+
+services:
+  # Example: expose local HTTP on port 3000 as https://api.example.com
+  api:
+    image: mygrok:${MYGROK_TAG:-0.2.0}
+    build:
+      context: ../..
+      dockerfile: deploy/docker/Dockerfile
+      args:
+        VERSION: ${MYGROK_TAG:-0.2.0}
+    command: ["mygrok", "http", "3000", "api", "--server", "${MYGROK_SERVER}", "--no-tui", "--log-format", "json"]
+    environment:
+      MYGROK_TOKEN: ${MYGROK_TOKEN}
+    network_mode: host
+    restart: unless-stopped
+
+  # Example: expose a local TCP port (e.g. SSH on 22). Uncomment to enable.
+  # ssh:
+  #   image: mygrok:${MYGROK_TAG:-0.2.0}
+  #   command: ["mygrok", "tcp", "22", "ssh", "--server", "${MYGROK_SERVER}", "--no-tui", "--log-format", "json"]
+  #   environment:
+  #     MYGROK_TOKEN: ${MYGROK_TOKEN}
+  #   network_mode: host
+  #   restart: unless-stopped

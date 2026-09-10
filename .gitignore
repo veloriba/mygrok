@@ -1,5 +1,6 @@
 # Binaries
 bin/
+dist/
 mygrok
 mygrok-server
 
@@ -14,3 +15,9 @@ vendor/
 .env
 config.toml
 config.mk
+
+# Run wrapper
+run.sh
+
+# AI Agent Instructions
+AGENTS.md
