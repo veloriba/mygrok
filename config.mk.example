@@ -1,6 +1,18 @@
 # Server configuration template for Makefile
-# Copy this to config.mk and fill in your values
+# Copy this to config.mk and fill in your values (config.mk is gitignored).
 SERVER_USER=your-user
 SERVER_HOST=your-vps.com
 DOMAIN=yourdomain.com
+# Replace this placeholder — the build refuses to deploy it as-is.
 TOKEN=your-secret-token
+# Sudo password for remote service management (used with `sudo -S`). Optional
+# if your SSH user has passwordless sudo. Can also be provided via .env or the
+# environment. Never commit a real value.
+SUDO_PWD=
+
+# Optional: Windows host client deployment (make win-client-install).
+# SSH alias of the Windows machine, Windows logon user, and the directory
+# (Windows path) where the binary + config.json live.
+WIN_HOST=
+WIN_USER=
+WIN_DIR=

@@ -2,19 +2,31 @@ package client
 
 import (
 	"bufio"
+	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
+	"io"
+	"log"
+	"log/slog"
+	"math/rand"
 	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"os"
+	"os/signal"
+	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
+	"syscall"
 	"time"
 
-	"github.com/veloriba/mygrok/internal/protocol"
 	"github.com/fatih/color"
 	"github.com/hashicorp/yamux"
+	"github.com/veloriba/mygrok/internal/protocol"
+	"github.com/veloriba/mygrok/internal/version"
 )
 
 type RequestInfo struct {
@@ -25,66 +37,202 @@ type RequestInfo struct {
 	Duration  time.Duration
 }
 
-type TunnelClient struct {
-	ServerAddr string
-	Token      string
-	Subdomain  string
-	LocalAddr  string // e.g. "http://localhost:3000"
-
-	mu        sync.Mutex
-	requests  []RequestInfo
-	publicURL string
-	errorMsg  string
-	startTime time.Time
+// Config holds the parameters for a TunnelClient.
+type Config struct {
+	ServerAddr    string
+	Token         string
+	Subdomain     string
+	LocalAddr     string // http: "http://host:port"; tcp/udp: "host:port"
+	Protocol      string // protocol.ProtocolHTTP (default), ProtocolTCP, ProtocolUDP
+	RequestedPort int    // tcp/udp: requested public port, 0 = auto-assign
+	NoTUI         bool
+	// HTTP-only options:
+	FlushInterval   time.Duration // -1 = flush after every write
+	Insecure        bool          // skip TLS verification for the local target
+	SetHeaders      []string      // "Key: Value" headers injected into proxied requests
+	UpstreamTimeout time.Duration // 0 = no timeout
 }
 
-func NewTunnelClient(serverAddr, token, subdomain, localAddr string) *TunnelClient {
-	// Ensure localAddr has scheme
-	if !strings.HasPrefix(localAddr, "http") {
+type TunnelClient struct {
+	ServerAddr    string
+	Token         string
+	Subdomain     string
+	LocalAddr     string
+	Protocol      string
+	RequestedPort int
+	NoTUI         bool
+
+	FlushInterval   time.Duration
+	Insecure        bool
+	SetHeaders      []string
+	UpstreamTimeout time.Duration
+
+	mu         sync.Mutex
+	requests   []RequestInfo
+	publicURL  string
+	publicPort int
+	errorMsg   string
+	startTime  time.Time
+
+	totalRequests uint64
+	bytesSent     uint64
+	bytesReceived uint64
+}
+
+func NewTunnelClient(cfg Config) *TunnelClient {
+	if cfg.Protocol == "" {
+		cfg.Protocol = protocol.ProtocolHTTP
+	}
+	localAddr := cfg.LocalAddr
+	if cfg.Protocol == protocol.ProtocolHTTP && !strings.HasPrefix(localAddr, "http") {
 		localAddr = "http://" + localAddr
 	}
 	return &TunnelClient{
-		ServerAddr: serverAddr,
-		Token:      token,
-		Subdomain:  subdomain,
-		LocalAddr:  localAddr,
-		startTime:  time.Now(),
+		ServerAddr:      cfg.ServerAddr,
+		Token:           cfg.Token,
+		Subdomain:       cfg.Subdomain,
+		LocalAddr:       localAddr,
+		Protocol:        cfg.Protocol,
+		RequestedPort:   cfg.RequestedPort,
+		NoTUI:           cfg.NoTUI,
+		FlushInterval:   cfg.FlushInterval,
+		Insecure:        cfg.Insecure,
+		SetHeaders:      cfg.SetHeaders,
+		UpstreamTimeout: cfg.UpstreamTimeout,
+		startTime:       time.Now(),
 	}
 }
 
+// PublicPort returns the public port assigned to this tunnel (tcp/udp), or 0
+// until the handshake completes.
+func (c *TunnelClient) PublicPort() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.publicPort
+}
+
+// logger returns the structured logger for the client.
+func (c *TunnelClient) logger() *slog.Logger {
+	return slog.Default()
+}
+
+// logf emits a structured lifecycle event. It is only active in --no-tui mode
+// so a service manager / journal can observe connect and reconnect events; in
+// TUI mode the dashboard already renders state and stderr would corrupt it.
+func (c *TunnelClient) logf(level slog.Level, msg string, args ...any) {
+	if c.NoTUI {
+		c.logger().Log(context.Background(), level, msg, args...)
+	}
+}
+
+// backoff returns an exponentially growing, jittered reconnect delay capped at
+// max for the given 1-based attempt. The jitter avoids a thundering herd when
+// many clients reconnect at once after a server restart.
+func backoff(base, max time.Duration, attempt int) time.Duration {
+	if attempt <= 0 {
+		return base
+	}
+	d := base
+	for i := 1; i < attempt && d < max; i++ {
+		d *= 2
+	}
+	if d > max {
+		d = max
+	}
+	return time.Duration(int64(d) * (75 + rand.Int63n(26)) / 100)
+}
+
+func (c *TunnelClient) reconnectInterval() time.Duration {
+	if v := os.Getenv("MYGROK_RECONNECT_SEC"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			return time.Duration(n) * time.Second
+		}
+	}
+	return 5 * time.Second
+}
+
 func (c *TunnelClient) Start() error {
-	go c.uiLoop()
+	done := make(chan struct{})
+	signalChan := make(chan os.Signal, 1)
+	signal.Notify(signalChan, os.Interrupt, syscall.SIGTERM)
+
+	go func() {
+		<-signalChan
+		close(done)
+	}()
+	if !c.NoTUI {
+		go c.uiLoop(done)
+	}
+
+	base := c.reconnectInterval()
+	var attempt int
 	for {
-		err := c.connect()
+		select {
+		case <-done:
+			return nil
+		default:
+		}
+		started := time.Now()
+		err := c.connect(done)
 		if err != nil {
 			c.mu.Lock()
 			c.publicURL = ""
+			c.publicPort = 0
 			c.errorMsg = err.Error()
 			c.mu.Unlock()
-			time.Sleep(5 * time.Second)
+
+			// A session that stayed up at least as long as the base interval is
+			// considered healthy, so reset the backoff after real connectivity.
+			if time.Since(started) >= base {
+				attempt = 0
+			}
+			attempt++
+			wait := backoff(base, 30*time.Second, attempt)
+			c.logf(slog.LevelWarn, "disconnected", "err", err.Error(), "attempt", attempt, "reconnect_in", wait.String())
+			select {
+			case <-done:
+				return nil
+			case <-time.After(wait):
+			}
 			continue
 		}
 	}
 }
 
-func (c *TunnelClient) connect() error {
-	conn, err := net.Dial("tcp", c.ServerAddr)
+func (c *TunnelClient) connect(done <-chan struct{}) error {
+	dialer := net.Dialer{KeepAlive: 30 * time.Second}
+	conn, err := dialer.Dial("tcp", c.ServerAddr)
 	if err != nil {
 		return err
 	}
+
+	// Wrap connection to track bytes
+	conn = &countingConn{Conn: conn, c: c}
 	defer conn.Close()
+
+	// A single bufio.Reader is shared between the handshake and the yamux
+	// session. The server may emit its first yamux frame in the same TCP
+	// segment as the handshake response; if the handshake used its own reader
+	// that frame would be buffered and lost when yamux wraps the conn in a
+	// fresh reader.
+	r := bufio.NewReader(conn)
 
 	req := protocol.HandshakeRequest{
 		Token:     c.Token,
 		Subdomain: c.Subdomain,
-		Protocol:  "http",
+		Protocol:  c.Protocol,
+		Port:      c.RequestedPort,
 	}
 	if err := json.NewEncoder(conn).Encode(req); err != nil {
 		return err
 	}
 
+	line, err := r.ReadString('\n')
+	if err != nil {
+		return err
+	}
 	var resp protocol.HandshakeResponse
-	if err := json.NewDecoder(conn).Decode(&resp); err != nil {
+	if err := json.Unmarshal([]byte(line), &resp); err != nil {
 		return err
 	}
 
@@ -92,26 +240,94 @@ func (c *TunnelClient) connect() error {
 		return fmt.Errorf("server rejected handshake: %s", resp.Message)
 	}
 
+	host, _, _ := net.SplitHostPort(c.ServerAddr)
 	c.mu.Lock()
-	c.publicURL = resp.URL
 	c.errorMsg = ""
+	switch c.Protocol {
+	case protocol.ProtocolTCP, protocol.ProtocolUDP:
+		c.publicPort = resp.Port
+		c.publicURL = fmt.Sprintf("%s://%s:%d", c.Protocol, host, resp.Port)
+	default:
+		c.publicURL = resp.URL
+	}
 	c.mu.Unlock()
 
-	session, err := yamux.Server(conn, nil)
+	c.logf(slog.LevelInfo, "connected", "protocol", c.Protocol, "url", c.publicURL)
+
+	cfg := yamux.DefaultConfig()
+	cfg.KeepAliveInterval = 10 * time.Second
+	cfg.LogOutput = nil // yamux rejects both Logger and LogOutput being set
+	// Route yamux's internal [ERR]/[WARN] logging through slog in service mode;
+	// discard it in TUI mode so it cannot corrupt the dashboard redraw.
+	if c.NoTUI {
+		cfg.Logger = log.New(slogWriter{logger: c.logger().With("component", "yamux")}, "", 0)
+	} else {
+		cfg.Logger = log.New(io.Discard, "", 0)
+	}
+	session, err := yamux.Server(&bufferedConn{r: r, w: conn, c: conn}, cfg)
 	if err != nil {
 		return err
 	}
 
+	switch c.Protocol {
+	case protocol.ProtocolTCP:
+		return c.serveTCP(session, done)
+	case protocol.ProtocolUDP:
+		return c.serveUDP(session, done)
+	default:
+		return c.serveHTTP(session, done)
+	}
+}
+
+func (c *TunnelClient) serveHTTP(session *yamux.Session, done <-chan struct{}) error {
 	// Create a reverse proxy to our local app
 	target, _ := url.Parse(c.LocalAddr)
 	proxy := httputil.NewSingleHostReverseProxy(target)
 
+	// The stdlib ReverseProxy already auto-flushes SSE (text/event-stream) and
+	// chunked (ContentLength == -1) responses immediately, so FlushInterval
+	// mainly affects responses with a known Content-Length.
+	proxy.FlushInterval = c.FlushInterval
+
 	// Ensure the Host header is set to the local target
 	// Next.js and other dev servers often reject requests with the wrong Host header
 	originalDirector := proxy.Director
-	proxy.Director = func(req *http.Request) {
+	hostDirector := func(req *http.Request) {
 		originalDirector(req)
 		req.Host = target.Host
+	}
+	// Inject user-provided headers after the original Director runs
+	if len(c.SetHeaders) > 0 {
+		proxy.Director = func(req *http.Request) {
+			hostDirector(req)
+			for _, h := range c.SetHeaders {
+				k, v, ok := strings.Cut(h, ":")
+				if !ok {
+					continue
+				}
+				req.Header.Set(strings.TrimSpace(k), strings.TrimSpace(v))
+			}
+		}
+	} else {
+		proxy.Director = hostDirector
+	}
+
+	// Build a custom transport when --insecure and/or --upstream-timeout are set;
+	// otherwise keep the default transport.
+	if c.Insecure || c.UpstreamTimeout > 0 {
+		var transport *http.Transport
+		if dt, ok := http.DefaultTransport.(*http.Transport); ok {
+			transport = dt.Clone()
+		} else {
+			transport = &http.Transport{}
+		}
+		if c.Insecure {
+			transport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
+		}
+		if c.UpstreamTimeout > 0 {
+			transport.ResponseHeaderTimeout = c.UpstreamTimeout
+		}
+		proxy.Transport = transport
 	}
 
 	// Wrap the proxy with our logging middleware
@@ -119,7 +335,7 @@ func (c *TunnelClient) connect() error {
 		start := time.Now()
 		rw := &responseWriter{ResponseWriter: w, status: 200}
 		proxy.ServeHTTP(rw, r)
-		
+
 		c.addRequest(RequestInfo{
 			Timestamp: start,
 			Method:    r.Method,
@@ -129,8 +345,258 @@ func (c *TunnelClient) connect() error {
 		})
 	})
 
+	server := &http.Server{Handler: handler}
+	go func() {
+		<-done
+		server.Close()
+	}()
+
 	// Serve the HTTP requests over the yamux session
 	return http.Serve(session, handler)
+}
+
+// serveTCP accepts one yamux stream per inbound (server-side) connection and
+// bridges it to the local target.
+func (c *TunnelClient) serveTCP(session *yamux.Session, done <-chan struct{}) error {
+	go func() {
+		<-done
+		session.Close()
+	}()
+	for {
+		stream, err := session.Accept()
+		if err != nil {
+			return err
+		}
+		go c.bridgeStreamToLocal(stream)
+	}
+}
+
+func (c *TunnelClient) bridgeStreamToLocal(stream net.Conn) {
+	defer stream.Close()
+	local, err := net.Dial("tcp", c.LocalAddr)
+	if err != nil {
+		return
+	}
+	defer local.Close()
+	errc := make(chan struct{}, 2)
+	go func() { io.Copy(stream, local); errc <- struct{}{} }()
+	go func() { io.Copy(local, stream); errc <- struct{}{} }()
+	<-errc
+}
+
+// serveUDP bridges a single yamux stream to the local UDP target. Packets are
+// framed with the external peer address so the server can route responses back
+// to the correct peer. Responses are sent to the most recent peer (single-peer
+// friendly; last-writer-wins under concurrent peers).
+func (c *TunnelClient) serveUDP(session *yamux.Session, done <-chan struct{}) error {
+	go func() {
+		<-done
+		session.Close()
+	}()
+	stream, err := session.Accept()
+	if err != nil {
+		return err
+	}
+	defer stream.Close()
+
+	local, err := net.ResolveUDPAddr("udp", c.LocalAddr)
+	if err != nil {
+		return err
+	}
+	localConn, err := net.ListenUDP("udp", nil)
+	if err != nil {
+		return err
+	}
+	defer localConn.Close()
+
+	var mu sync.Mutex
+	var lastPeer []byte
+
+	// stream -> local target
+	go func() {
+		for {
+			peer, payload, err := protocol.ReadUDPPacket(stream)
+			if err != nil {
+				return
+			}
+			mu.Lock()
+			lastPeer = peer
+			mu.Unlock()
+			localConn.WriteToUDP(payload, local)
+		}
+	}()
+
+	// local target -> stream (responses routed to the most recent peer)
+	buf := make([]byte, 65536)
+	for {
+		n, _, err := localConn.ReadFromUDP(buf)
+		if err != nil {
+			return err
+		}
+		mu.Lock()
+		peer := lastPeer
+		mu.Unlock()
+		if err := protocol.WriteUDPPacket(stream, peer, buf[:n]); err != nil {
+			return err
+		}
+	}
+}
+
+func (c *TunnelClient) addRequest(info RequestInfo) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.requests = append(c.requests, info)
+	if len(c.requests) > 20 {
+		c.requests = c.requests[1:]
+	}
+	atomic.AddUint64(&c.totalRequests, 1)
+}
+
+func (c *TunnelClient) uiLoop(done <-chan struct{}) {
+	blue := color.New(color.FgBlue).SprintFunc()
+	green := color.New(color.FgGreen).SprintFunc()
+	yellow := color.New(color.FgYellow).SprintFunc()
+	cyan := color.New(color.FgCyan).SprintFunc()
+	white := color.New(color.FgWhite, color.Bold).SprintFunc()
+
+	for {
+		c.mu.Lock()
+		urlStr := c.publicURL
+		errMsg := c.errorMsg
+		requests := make([]RequestInfo, len(c.requests))
+		copy(requests, c.requests)
+		c.mu.Unlock()
+
+		fmt.Print("\033[H\033[2J")
+		fmt.Printf("%s\n\n", white("mygrok"))
+
+		status := yellow("connecting...")
+		if urlStr != "" {
+			status = green("online")
+		} else if errMsg != "" {
+			status = color.New(color.FgRed).Sprint("error")
+		}
+
+		fmt.Printf("%-20s %s\n", "Session Status", status)
+		if errMsg != "" {
+			fmt.Printf("%-20s %s\n", "Error", color.New(color.FgRed).Sprint(errMsg))
+		}
+		fmt.Printf("%-20s %s\n", "Version", version.Version)
+		fmt.Printf("%-20s %s\n", "Region", "Europe")
+
+		// Show both HTTP and HTTPS if possible, or just the one we have
+		if urlStr != "" {
+			fmt.Printf("%-20s %s -> %s\n", "Forwarding", blue(urlStr), cyan(c.LocalAddr))
+			// If it's http, also show how it would look with https (assuming Nginx is set up)
+			if strings.HasPrefix(urlStr, "http://") {
+				httpsURL := "https://" + urlStr[7:]
+				fmt.Printf("%-20s %s -> %s\n", "", blue(httpsURL), cyan(c.LocalAddr))
+			}
+		}
+
+		// Statistics block
+		totalReqs := atomic.LoadUint64(&c.totalRequests)
+		sent := atomic.LoadUint64(&c.bytesSent)
+		received := atomic.LoadUint64(&c.bytesReceived)
+		uptime := time.Since(c.startTime).Truncate(time.Second)
+
+		fmt.Printf("\n%-20s %d\n", "Total Requests", totalReqs)
+		fmt.Printf("%-20s %s\n", "KB Transmitted", formatKB(sent))
+		fmt.Printf("%-20s %s\n", "KB Received", formatKB(received))
+		fmt.Printf("%-20s %s\n", "Uptime", uptime.String())
+
+		fmt.Printf("\n%s\n", white("HTTP Requests"))
+		fmt.Printf("%-20s %-10s %-10s %s\n", "TIME", "METHOD", "STATUS", "PATH")
+		fmt.Println(strings.Repeat("-", 100))
+
+		for i := len(requests) - 1; i >= 0; i-- {
+			req := requests[i]
+			statusStr := fmt.Sprintf("%d", req.Status)
+			rawStatus := statusStr
+			if req.Status >= 200 && req.Status < 300 {
+				statusStr = green(statusStr)
+			} else if req.Status >= 400 {
+				statusStr = color.New(color.FgRed).Sprint(statusStr)
+			}
+
+			// Handle padding manually because ANSI codes mess up fmt.Printf width
+			count := 10 - len(rawStatus)
+			if count < 0 {
+				count = 0
+			}
+			padding := strings.Repeat(" ", count)
+
+			fmt.Printf("%-20s %-10s %s%s %s\n",
+				req.Timestamp.Format("15:04:05.000"),
+				req.Method,
+				statusStr,
+				padding,
+				req.Path,
+			)
+		}
+
+		select {
+		case <-done:
+			return
+		case <-time.After(5 * time.Second):
+		}
+	}
+}
+
+func formatKB(b uint64) string {
+	return fmt.Sprintf("%.2f KB", float64(b)/1024.0)
+}
+
+// bufferedConn is an io.ReadWriteCloser that reads from a shared *bufio.Reader
+// (used by the handshake) while writing to and closing the underlying conn.
+// This lets yamux reuse any bytes the handshake reader already buffered.
+type bufferedConn struct {
+	r io.Reader
+	w io.Writer
+	c io.Closer
+}
+
+func (bc *bufferedConn) Read(p []byte) (int, error)  { return bc.r.Read(p) }
+func (bc *bufferedConn) Write(p []byte) (int, error) { return bc.w.Write(p) }
+func (bc *bufferedConn) Close() error                { return bc.c.Close() }
+
+// slogWriter bridges yamux's *log.Logger output into slog, mapping the
+// "[ERR]"/"[WARN]" prefixes to levels so the noise is filterable.
+type slogWriter struct {
+	logger *slog.Logger
+}
+
+func (w slogWriter) Write(p []byte) (int, error) {
+	line := strings.TrimRight(string(p), "\n")
+	if line == "" {
+		return len(p), nil
+	}
+	lvl := slog.LevelDebug
+	switch {
+	case strings.Contains(line, "[ERR]"):
+		lvl = slog.LevelError
+	case strings.Contains(line, "[WARN]"):
+		lvl = slog.LevelWarn
+	}
+	w.logger.Log(context.Background(), lvl, line)
+	return len(p), nil
+}
+
+type countingConn struct {
+	net.Conn
+	c *TunnelClient
+}
+
+func (cc *countingConn) Read(p []byte) (n int, err error) {
+	n, err = cc.Conn.Read(p)
+	atomic.AddUint64(&cc.c.bytesReceived, uint64(n))
+	return
+}
+
+func (cc *countingConn) Write(p []byte) (n int, err error) {
+	n, err = cc.Conn.Write(p)
+	atomic.AddUint64(&cc.c.bytesSent, uint64(n))
+	return
 }
 
 type responseWriter struct {
@@ -154,81 +620,5 @@ func (rw *responseWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
 func (rw *responseWriter) Flush() {
 	if f, ok := rw.ResponseWriter.(http.Flusher); ok {
 		f.Flush()
-	}
-}
-
-func (c *TunnelClient) addRequest(info RequestInfo) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.requests = append(c.requests, info)
-	if len(c.requests) > 20 {
-		c.requests = c.requests[1:]
-	}
-}
-
-func (c *TunnelClient) uiLoop() {
-	blue := color.New(color.FgBlue).SprintFunc()
-	green := color.New(color.FgGreen).SprintFunc()
-	yellow := color.New(color.FgYellow).SprintFunc()
-	cyan := color.New(color.FgCyan).SprintFunc()
-	white := color.New(color.FgWhite, color.Bold).SprintFunc()
-
-	for {
-		c.mu.Lock()
-		urlStr := c.publicURL
-		errMsg := c.errorMsg
-		requests := make([]RequestInfo, len(c.requests))
-		copy(requests, c.requests)
-		c.mu.Unlock()
-
-		fmt.Print("\033[H\033[2J")
-		fmt.Printf("%s\n\n", white("mygrok"))
-		
-		status := yellow("connecting...")
-		if urlStr != "" {
-			status = green("online")
-		} else if errMsg != "" {
-			status = color.New(color.FgRed).Sprint("error")
-		}
-
-		fmt.Printf("%-20s %s\n", "Session Status", status)
-		if errMsg != "" {
-			fmt.Printf("%-20s %s\n", "Error", color.New(color.FgRed).Sprint(errMsg))
-		}
-		fmt.Printf("%-20s %s\n", "Version", "0.1.0")
-		fmt.Printf("%-20s %s\n", "Region", "Europe")
-		
-		// Show both HTTP and HTTPS if possible, or just the one we have
-		if urlStr != "" {
-			fmt.Printf("%-20s %s -> %s\n", "Forwarding", blue(urlStr), cyan(c.LocalAddr))
-			// If it's http, also show how it would look with https (assuming Nginx is set up)
-			if strings.HasPrefix(urlStr, "http://") {
-				httpsURL := "https://" + urlStr[7:]
-				fmt.Printf("%-20s %s -> %s\n", "", blue(httpsURL), cyan(c.LocalAddr))
-			}
-		}
-		
-		fmt.Printf("\n%s\n", white("HTTP Requests"))
-		fmt.Printf("%-30s %-10s %-40s %s\n", "TIME", "METHOD", "PATH", "STATUS")
-		fmt.Println(strings.Repeat("-", 100))
-
-		for i := len(requests) - 1; i >= 0; i-- {
-			req := requests[i]
-			statusStr := fmt.Sprintf("%d", req.Status)
-			if req.Status >= 200 && req.Status < 300 {
-				statusStr = green(statusStr)
-			} else if req.Status >= 400 {
-				statusStr = color.New(color.FgRed).Sprint(statusStr)
-			}
-			
-			fmt.Printf("%-30s %-10s %-40s %s\n", 
-				req.Timestamp.Format("15:04:05.000"),
-				req.Method,
-				req.Path,
-				statusStr,
-			)
-		}
-
-		time.Sleep(500 * time.Millisecond)
 	}
 }

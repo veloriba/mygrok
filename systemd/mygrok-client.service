@@ -1,0 +1,23 @@
+# mygrok client service template (not used directly).
+# All double-brace placeholders are substituted by scripts/install-client.sh.
+# The token is delivered via the MYGROK_TOKEN environment variable so it never
+# appears on the ExecStart command line (and thus not in `ps` output).
+
+[Unit]
+Description=mygrok client tunnel ({{SUBDOMAIN}}, {{PROTOCOL}})
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=60
+StartLimitBurst=10
+
+[Service]
+User={{USER}}
+Environment=MYGROK_SERVER={{SERVER}}
+Environment=MYGROK_TOKEN={{TOKEN}}
+ExecStart={{BINDIR}}/mygrok-client --no-tui {{PROTOCOL}} {{PORT}} {{SUBDOMAIN}} --public-port {{PUBLIC_PORT}}
+Restart=always
+RestartSec=5
+SyslogIdentifier=mygrok-{{SUBDOMAIN}}
+
+[Install]
+WantedBy=multi-user.target

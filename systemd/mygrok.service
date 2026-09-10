@@ -1,0 +1,24 @@
+# mygrok server service template (not used directly).
+# Placeholders {{...}} are substituted by scripts/install-server.sh.
+#
+# The auth token is delivered via EnvironmentFile (mode 0600), never on the
+# ExecStart command line, so it does not appear in `ps` output or in the
+# world-readable unit file under /etc/systemd/system.
+
+[Unit]
+Description=mygrok server ({{DOMAIN}})
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=60
+StartLimitBurst=10
+
+[Service]
+User={{USER}}
+EnvironmentFile={{ENV_FILE}}
+ExecStart={{BINDIR}}/mygrok-server -domain {{DOMAIN}} {{EXTRA_ARGS}}
+Restart=always
+RestartSec=3
+SyslogIdentifier=mygrok
+
+[Install]
+WantedBy=multi-user.target
