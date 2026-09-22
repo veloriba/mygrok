@@ -468,13 +468,34 @@ func (s *TunnelServer) startHTTP() error {
 	return srv.Serve(ln)
 }
 
-func (s *TunnelServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	host := r.Host
-	domainLen := len(s.Domain)
-	subdomain := ""
-	if len(host) > domainLen+1 && host[len(host)-domainLen:] == s.Domain {
-		subdomain = host[:len(host)-domainLen-1]
+// stripHostPort removes an optional ":port" suffix from a Host header value,
+// handling hostnames, IPv4 addresses, and bracketed IPv6 literals. Go has no
+// strings.CutHostPort and net.SplitHostPort rejects hosts without a port, so
+// the raw value is kept when there is nothing to strip.
+func stripHostPort(host string) string {
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		return h
 	}
+	return host
+}
+
+// subdomainFromHost extracts the tunnel subdomain from a request Host header
+// (e.g. "api.example.com" -> "api" for domain "example.com"). It tolerates a
+// port suffix in the host ("api.example.com:8080") and requires a dot
+// separator so that "subex.com" can never be mistaken for a subdomain of
+// "ex.com". Returns "" when the host is not a subdomain of s.Domain.
+func (s *TunnelServer) subdomainFromHost(host string) string {
+	host = stripHostPort(host)
+	domainLen := len(s.Domain)
+	if len(host) > domainLen+1 && host[len(host)-domainLen-1] == '.' && host[len(host)-domainLen:] == s.Domain {
+		return host[:len(host)-domainLen-1]
+	}
+	return ""
+}
+
+func (s *TunnelServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	host := stripHostPort(r.Host)
+	subdomain := s.subdomainFromHost(host)
 
 	if subdomain == "" {
 		http.Error(w, "Tunnel Not Found", http.StatusNotFound)

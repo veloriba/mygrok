@@ -435,6 +435,33 @@ func TestHTTPStreamReclaimed(t *testing.T) {
 	}
 }
 
+// TestSubdomainFromHost pins the Host-header parsing rules: the subdomain must
+// be separated from the server domain by a dot, and a port suffix in the host
+// ("api.example.com:8080", when dialing the raw front port directly) must not
+// break the match.
+func TestSubdomainFromHost(t *testing.T) {
+	cases := []struct {
+		domain string
+		host   string
+		want   string
+	}{
+		{"example.com", "api.example.com", "api"},
+		{"example.com", "a.b.example.com", "a.b"},
+		{"example.com", "api.example.com:8080", "api"},
+		{"example.com", "example.com", ""},
+		{"example.com", "example.com:8080", ""},
+		{"ex.com", "subex.com", ""}, // old suffix-only match parsed this as "su"
+		{"example.com", "other.com", ""},
+		{"example.com", "", ""},
+	}
+	for _, tc := range cases {
+		srv := NewTunnelServer("t", tc.domain, "127.0.0.1:0", "127.0.0.1:0", 0, 0)
+		if got := srv.subdomainFromHost(tc.host); got != tc.want {
+			t.Errorf("domain %q host %q: subdomainFromHost = %q, want %q", tc.domain, tc.host, got, tc.want)
+		}
+	}
+}
+
 // TestHTTPRequestToTCPTunnel is the regression guard for the deployment break:
 // an HTTP request routed by hostname to a tunnel declared as "tcp" (e.g. a vllm
 // server exposed as https://<sub>.domain/v1) must be proxied over the tunnel's

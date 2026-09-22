@@ -1,0 +1,9 @@
+# Keep the Docker build context small and free of local-only artifacts.
+.git
+bin/
+dist/
+deploy/docker/.env
+AGENTS.md
+run.sh
+config.mk
+*.md

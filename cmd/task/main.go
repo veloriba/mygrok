@@ -62,6 +62,23 @@ func imageTag() string {
 	return "latest"
 }
 
+// buildCommandArgs assembles the mygrok client CLI args for a tunnel.
+func buildCommandArgs(proto, port, sub, localHost string, publicPort int) []string {
+	args := []string{
+		"mygrok", proto, port, sub,
+		"--server", "${MYGROK_SERVER}",
+		"--no-tui", "--log-format", "json",
+		"--local-host", localHost,
+	}
+	if proto == "https" {
+		args = append(args, "--insecure")
+	}
+	if publicPort > 0 {
+		args = append(args, "--public-port", strconv.Itoa(publicPort))
+	}
+	return args
+}
+
 var addCmd = &cobra.Command{
 	Use:   "add <dir> --port <n> --sub <name>",
 	Short: "Scaffold <dir>/mygrok/ with a docker-compose tunnel config",
@@ -85,7 +102,6 @@ Examples:
 		port, _ := cmd.Flags().GetInt("port")
 		sub, _ := cmd.Flags().GetString("sub")
 		proto, _ := cmd.Flags().GetString("proto")
-		scheme, _ := cmd.Flags().GetString("scheme")
 		localHost, _ := cmd.Flags().GetString("local-host")
 		network, _ := cmd.Flags().GetString("network")
 		publicPort, _ := cmd.Flags().GetInt("public-port")
@@ -117,18 +133,7 @@ Examples:
 			return err
 		}
 
-		cmdArgs := []string{
-			"mygrok", proto, strconv.Itoa(port), sub,
-			"--server", "${MYGROK_SERVER}",
-			"--no-tui", "--log-format", "json",
-			"--local-host", localHost,
-		}
-		if scheme == "https" {
-			cmdArgs = append(cmdArgs, "--insecure")
-		}
-		if publicPort > 0 {
-			cmdArgs = append(cmdArgs, "--public-port", strconv.Itoa(publicPort))
-		}
+		cmdArgs := buildCommandArgs(proto, strconv.Itoa(port), sub, localHost, publicPort)
 		var b strings.Builder
 		b.WriteString("[")
 		for i, a := range cmdArgs {
@@ -351,7 +356,6 @@ func main() {
 	addCmd.Flags().Int("port", 0, "local port to expose (required)")
 	addCmd.Flags().String("sub", "", "tunnel subdomain (required)")
 	addCmd.Flags().String("proto", "http", "tunnel protocol: http|https|tcp|udp")
-	addCmd.Flags().String("scheme", "http", "local upstream scheme (http|https)")
 	addCmd.Flags().String("local-host", "127.0.0.1", "upstream host (use the container name with --network)")
 	addCmd.Flags().String("network", "", "external docker network to join instead of network_mode: host")
 	addCmd.Flags().Int("public-port", 0, "requested public port for tcp/udp (0 = auto)")
