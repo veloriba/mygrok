@@ -1,0 +1,27 @@
+# Bare mygrok-server, no TLS front (server side).
+#
+# Setup:
+#   cp .env.example .env   # fill DOMAIN / MYGROK_TOKEN
+#   docker compose up -d
+#
+# For tcp/udp-only setups or private networks. Clients dial
+# your-vps.com:7000 directly; tunnels get public ports 20000-20099.
+#
+# The mygrok image must exist locally: build it once from the repo root
+# (see ../README.md) or `docker load` a tarball from `make docker-save`.
+
+name: mygrok-example-05
+
+services:
+  mygrok-server:
+    image: mygrok:${MYGROK_TAG:-0.3.0}
+    command: ["mygrok-server", "-domain", "${DOMAIN}", "-control", "0.0.0.0:7000", "-http", "0.0.0.0:8080", "-log-format", "json"]
+    environment:
+      MYGROK_TOKEN: ${MYGROK_TOKEN}
+    ports:
+      - "7000:7000/tcp"
+      - "20000-20099:20000-20099/tcp"
+      - "20000-20099:20000-20099/udp"
+    # 8080 is NOT published: without a TLS front, HTTP tunnels would be
+    # plain HTTP on the internet — publish it only on trusted networks.
+    restart: unless-stopped

@@ -1,0 +1,60 @@
+# mygrok server stack: tunnel server + nginx TLS front.
+#
+# Setup:
+#   cp .env.server.example .env.server   # fill DOMAIN / MYGROK_TOKEN
+#   mkdir -p certs                       # drop fullchain.pem / privkey.pem
+#   docker compose --env-file .env.server -f docker-compose.server.yml up -d
+#
+# Day-to-day:
+#   docker compose --env-file .env.server -f docker-compose.server.yml ps
+#   docker compose --env-file .env.server -f docker-compose.server.yml logs -f mygrok-server
+# (or `make docker-server-up|down|status|logs SERVICE=mygrok-server` from the repo root)
+#
+# Ports: 7000 (control, clients dial in), 80/443 (public HTTP via nginx),
+# 20000-20099 (auto-assigned tcp/udp tunnel ports).
+# TLS: put a wildcard certificate for *.DOMAIN into ./certs/
+# (fullchain.pem + privkey.pem) — see the "SSL & Nginx" section in README.md.
+#
+# The image is built on first `up` (or `make docker-build` in the repo root).
+# It contains both binaries (mygrok client + mygrok-server); this stack runs
+# the server one via the `command:` below.
+
+name: mygrok-server
+
+services:
+  mygrok-server:
+    image: mygrok:${MYGROK_TAG:-0.3.0}
+    build:
+      context: ../..
+      dockerfile: deploy/docker/Dockerfile
+      args:
+        VERSION: ${MYGROK_TAG:-0.3.0}
+    command: ["mygrok-server", "-domain", "${DOMAIN}", "-control", "0.0.0.0:7000", "-http", "0.0.0.0:8080", "-log-format", "json"]
+    environment:
+      MYGROK_TOKEN: ${MYGROK_TOKEN}
+    ports:
+      - "7000:7000/tcp"
+      - "20000-20099:20000-20099/tcp"
+      - "20000-20099:20000-20099/udp"
+    # 8080 is intentionally NOT published: nginx (below) is the only front.
+    # The admin/stats listener stays on 127.0.0.1:7001 inside the container
+    # (loopback-only by default; `docker exec` in to use it).
+    restart: unless-stopped
+
+  nginx:
+    image: nginx:alpine
+    volumes:
+      - ./nginx-server.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./certs:/etc/nginx/certs:ro
+    ports:
+      - "80:80"
+      - "443:443"
+    depends_on:
+      - mygrok-server
+    restart: unless-stopped
+
+  # Let's Encrypt wildcard certs: manual DNS-01 does not fit in a container
+  # well. Either provision the cert on the host and mount ./certs (above),
+  # or run certbot on the host:
+  #   sudo certbot certonly --manual --preferred-challenges dns -d "*.DOMAIN"
+  # then copy the resulting fullchain.pem / privkey.pem into ./certs/.

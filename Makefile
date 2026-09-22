@@ -11,7 +11,7 @@ SUDO_PWD ?=
 -include config.mk
 -include .env
 
-.PHONY: build build-server build-client build-task clean server-install server-uninstall server-status cert-renew test run check-config win-client-build win-client-install win-client-uninstall win-client-status docker-build docker-buildx docker-save docker-up docker-down docker-status docker-logs task
+.PHONY: build build-server build-client build-task clean server-install server-uninstall server-status cert-renew test run check-config win-client-build win-client-install win-client-uninstall win-client-status docker-build docker-buildx docker-save docker-up docker-down docker-status docker-logs docker-server-build docker-server-up docker-server-down docker-server-status docker-server-logs task
 
 VERSION=$(shell cat VERSION)
 LDFLAGS=-ldflags "-X github.com/veloriba/mygrok/internal/version.Version=$(VERSION)"
@@ -78,7 +78,8 @@ DOCKER_TAG ?= $(VERSION)
 docker-build:
 	docker build -f $(DOCKER_DIR)/Dockerfile --build-arg VERSION=$(DOCKER_TAG) -t mygrok:$(DOCKER_TAG) .
 
-# Build linux/amd64 + linux/arm64 and push to a registry.
+# Build linux/amd64 + linux/arm64 and push to a registry. The image contains
+# both binaries (mygrok client + mygrok-server) under the same tag.
 # Usage: make docker-buildx DOCKER_REGISTRY=ghcr.io/veloriba
 docker-buildx:
 	docker buildx build -f $(DOCKER_DIR)/Dockerfile --build-arg VERSION=$(DOCKER_TAG) \
@@ -104,6 +105,29 @@ docker-status:
 
 docker-logs:
 	docker compose -f $(DOCKER_DIR)/docker-compose.client.yml logs -f --tail 100 $(SERVICE)
+
+# --- Docker (server) ---
+
+DOCKER_SERVER_COMPOSE := $(DOCKER_DIR)/docker-compose.server.yml
+DOCKER_SERVER_ENV := --env-file $(DOCKER_DIR)/.env.server
+
+# Same image as the client build: one image, two binaries (mygrok + mygrok-server).
+docker-server-build: docker-build
+
+# Start the server stack (mygrok-server + nginx TLS front).
+# Needs $(DOCKER_DIR)/.env.server (copy from .env.server.example) and a
+# wildcard cert in $(DOCKER_DIR)/certs/ (fullchain.pem + privkey.pem).
+docker-server-up:
+	docker compose $(DOCKER_SERVER_ENV) -f $(DOCKER_SERVER_COMPOSE) up -d
+
+docker-server-down:
+	docker compose $(DOCKER_SERVER_ENV) -f $(DOCKER_SERVER_COMPOSE) down
+
+docker-server-status:
+	docker compose $(DOCKER_SERVER_ENV) -f $(DOCKER_SERVER_COMPOSE) ps
+
+docker-server-logs:
+	docker compose $(DOCKER_SERVER_ENV) -f $(DOCKER_SERVER_COMPOSE) logs -f --tail 100 $(SERVICE)
 
 # Build the `mgrok-task` CLI (scaffold/manage per-project docker compose tunnels).
 # Install to your PATH: cp bin/mgrok-task /usr/local/bin/

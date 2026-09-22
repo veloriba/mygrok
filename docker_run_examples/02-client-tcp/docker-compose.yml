@@ -1,0 +1,22 @@
+# TCP port forward through mygrok (client side), e.g. SSH.
+#
+# Setup:
+#   cp .env.example .env   # fill MYGROK_SERVER / MYGROK_TOKEN
+#   docker compose up -d
+#   ssh -p 2222 your-user@your-vps.com
+#
+# The mygrok image must exist locally: build it once from the repo root
+# (see ../README.md) or `docker load` a tarball from `make docker-save`.
+
+name: mygrok-example-02
+
+services:
+  # Forward local TCP :22 (on the Docker host) to public port 2222 on the
+  # server (--public-port; 0 would auto-assign from the 20000-20099 range).
+  ssh:
+    image: mygrok:${MYGROK_TAG:-0.3.0}
+    command: ["mygrok", "tcp", "22", "ssh", "--server", "${MYGROK_SERVER}", "--public-port", "2222", "--no-tui", "--log-format", "json"]
+    environment:
+      MYGROK_TOKEN: ${MYGROK_TOKEN}
+    network_mode: host
+    restart: unless-stopped

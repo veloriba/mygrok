@@ -1,0 +1,6 @@
+# Local server env (copy .env.server.example to .env.server and fill in).
+# (.env itself is already ignored by the repo-level .gitignore.)
+.env.server
+
+# Wildcard TLS certs for the compose stack (fullchain.pem / privkey.pem).
+certs/

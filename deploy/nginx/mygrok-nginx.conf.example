@@ -1,0 +1,59 @@
+# mygrok server — nginx front-end for a bare VPS (systemd-installed server).
+#
+# Install (Ubuntu/Debian):
+#   sudo cp deploy/nginx/mygrok-nginx.conf.example /etc/nginx/sites-available/mygrok
+#   sudo nano /etc/nginx/sites-available/mygrok    # replace example.com with your base domain
+#   sudo ln -sf /etc/nginx/sites-available/mygrok /etc/nginx/sites-enabled/mygrok
+#   sudo rm /etc/nginx/sites-enabled/default       # if present (avoids a default_server clash)
+#   sudo nginx -t && sudo systemctl reload nginx
+#
+# TLS: a wildcard Let's Encrypt certificate for *.example.com is required
+# (HTTP-01 cannot issue wildcards — use the DNS-01 challenge, e.g.
+#   sudo certbot certonly --manual --preferred-challenges dns -d "*.example.com").
+# The paths below are the standard Let's Encrypt live paths; adjust if yours
+# differ.
+#
+# `http2 on;` requires nginx >= 1.25.1. On older releases (e.g. Ubuntu 24.04
+# ships 1.24) remove that line and use `listen 443 ssl http2;` instead.
+
+# WebSocket upgrade support (mygrok proxies WebSocket/HMR connections).
+map $http_upgrade $connection_upgrade {
+    default upgrade;
+    ''      close;
+}
+
+# Plain HTTP: redirect everything to HTTPS.
+server {
+    listen 80;
+    server_name ~^(?<subdomain>.+)\.example\.com$;
+
+    return 301 https://$host$request_uri;
+}
+
+# HTTPS: wildcard tunnel front-end. The mygrok server listens on 127.0.0.1:8080
+# (see `make server-install`); nginx routes by Host header, the server dispatches
+# to the right tunnel.
+server {
+    listen 443 ssl;
+    http2 on;
+    server_name ~^(?<subdomain>.+)\.example\.com$;
+
+    ssl_certificate     /etc/letsencrypt/live/example.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/example.com/privkey.pem;
+
+    location / {
+        proxy_pass http://127.0.0.1:8080;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection $connection_upgrade;
+
+        # Required for SSE/LLM streaming: never buffer streamed responses.
+        proxy_buffering off;
+        # Long-lived streams (SSE, LLM token streams) must not be cut off.
+        proxy_read_timeout 3600s;
+        proxy_send_timeout 3600s;
+    }
+}
