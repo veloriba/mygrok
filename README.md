@@ -78,7 +78,7 @@ Or from the repo root: `make docker-server-up` / `docker-server-status` / `docke
 sudo cp /etc/letsencrypt/live/DOMAIN/fullchain.pem /etc/letsencrypt/live/DOMAIN/privkey.pem deploy/docker/certs/
 ```
 
-The server container runs with `network_mode: host` and binds directly on the VPS: `7000/tcp` (clients dial in), `20000-20099` tcp+udp (auto-assigned tunnel ports), and the raw HTTP front `127.0.0.1:8080` (**loopback** by default — override via `MYGROK_HTTP_ADDR`). Nginx (bridge network) is the only public entry point for HTTP tunnels: `80`/`443`. Ports are host-wide — do not run another service on them while the stack is up.
+The server container runs with `network_mode: host` and binds directly on the VPS: `7000/tcp` (clients dial in), `20000-20099` tcp+udp (auto-assigned tunnel ports), and the raw HTTP front `127.0.0.1:8080` (**loopback** by default — override via `MYGROK_HTTP_ADDR`). The nginx sidecar also runs with `network_mode: host` (binding `80`/`443` directly — stop any host nginx first), so the whole chain stays loopback-local and dockerd's userland proxies are never involved. Ports are host-wide — do not run another service on them while the stack is up.
 
 **Bare binary (alternative).** Build and install as a systemd service on an Ubuntu VPS:
 

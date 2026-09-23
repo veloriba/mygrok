@@ -42,14 +42,14 @@ services:
 
   nginx:
     image: nginx:alpine
+    # Host network too: the mygrok front binds the host loopback, which a
+    # bridge-network container cannot reach. With both services on the host
+    # network the whole chain is loopback-local and dockerd proxies are not
+    # involved at all (bind 80/443 directly — stop any host nginx first).
+    network_mode: host
     volumes:
       - ./nginx-server.conf:/etc/nginx/conf.d/default.conf:ro
       - ./certs:/etc/nginx/certs:ro
-    ports:
-      - "80:80"
-      - "443:443"
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
     depends_on:
       - mygrok-server
     restart: unless-stopped

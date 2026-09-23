@@ -142,14 +142,10 @@ services:
 
   nginx:
     image: nginx:alpine
+    network_mode: host
     volumes:
       - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
       - ./certs:/etc/nginx/certs:ro
-    ports:
-      - "80:80"
-      - "443:443"
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
     depends_on:
       - mygrok-server
     restart: unless-stopped
@@ -182,8 +178,8 @@ server {
     ssl_certificate_key /etc/nginx/certs/privkey.pem;
 
     location / {
-        # server runs with network_mode: host, HTTP front on the host loopback
-        proxy_pass http://host.docker.internal:8080;
+        # both services use network_mode: host; front is on the host loopback
+        proxy_pass http://127.0.0.1:8080;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
