@@ -34,7 +34,22 @@ Run your own tunnel server on a VPS and expose local development servers (Next.j
 
 ### 1. Run the server
 
-**Docker (recommended).** The server stack is `mygrok-server` + an nginx TLS front in one compose file:
+**One-liner (recommended).** On your VPS:
+
+```bash
+ssh your-vps
+curl -fsSL https://raw.githubusercontent.com/veloriba/mygrok/main/install.sh | bash -
+```
+
+`install.sh` asks a few questions — base domain (the auth token is generated for you), image source, and the wildcard certificate (it reuses an existing Let's Encrypt directory for `*.DOMAIN` or runs the interactive `certbot --manual --dns` flow) — then installs the full stack (`mygrok-server` + nginx TLS front) into `/opt/mygrok`, verifies the front-end, and prints the client snippet plus the firewall port list. Re-running it upgrades in place (your token is preserved); `install.sh --uninstall` removes the stack. Non-interactive / air-gapped:
+
+```bash
+DOMAIN=example.com MYGROK_TOKEN=... \
+  curl -fsSL https://raw.githubusercontent.com/veloriba/mygrok/main/install.sh | bash - \
+  --non-interactive --image-tar /path/mygrok-0.3.0-amd64.tar.gz --cert-dir /path/certs
+```
+
+**Docker Compose (manual).** The server stack is `mygrok-server` + an nginx TLS front in one compose file:
 
 ```bash
 cd deploy/docker

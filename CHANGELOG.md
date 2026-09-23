@@ -4,6 +4,9 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+- `install.sh`: one-shot server installer — `curl -fsSL https://raw.githubusercontent.com/veloriba/mygrok/main/install.sh | bash -` on the VPS. Interactive (domain / image source / certificate / port-conflict questions) or fully non-interactive via flags/env (`--domain`, `--token`, `--image-tar`, `--registry`, `--cert-dir`, `--adopt-host-nginx`, `--dry-run`). Stages the stack into `/opt/mygrok`, reuses an existing Let's Encrypt dir or runs the interactive DNS-01 certbot flow, detects and (on confirmation) adopts conflicting host nginx / old binary-mode installs, verifies the front-end, and supports in-place upgrade and `--uninstall [--purge]`.
+
 ### Changed
 - README: documented how to get the server image (build on the VPS / registry / offline tarball) and added an "Upgrading / migrating the server" section (image update + `up -d` recreate, idempotent `make server-install`, binary↔Docker migration, client auto-reconnect behavior, cert renewal in both modes).
 
