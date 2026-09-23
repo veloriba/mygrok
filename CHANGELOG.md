@@ -4,6 +4,9 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Changed
+- README: documented how to get the server image (build on the VPS / registry / offline tarball) and added an "Upgrading / migrating the server" section (image update + `up -d` recreate, idempotent `make server-install`, binary↔Docker migration, client auto-reconnect behavior, cert renewal in both modes).
+
 ## [0.3.0] - 2026-09-23
 
 ### Added

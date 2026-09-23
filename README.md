@@ -39,11 +39,29 @@ Run your own tunnel server on a VPS and expose local development servers (Next.j
 ```bash
 cd deploy/docker
 cp .env.server.example .env.server      # set DOMAIN and MYGROK_TOKEN
-mkdir -p certs                          # drop fullchain.pem + privkey.pem (wildcard cert)
+mkdir -p certs                          # wildcard cert: fullchain.pem + privkey.pem (step below)
 docker compose --env-file .env.server -f docker-compose.server.yml up -d
 ```
 
 Or from the repo root: `make docker-server-up` / `docker-server-status` / `docker-server-logs SERVICE=mygrok-server`.
+
+**Getting the image** (the compose file builds it on first `up` if you have a repo checkout; otherwise provide the image and drop the `build:` block):
+
+- **Build on the VPS from source**: `git clone https://github.com/veloriba/mygrok` and let `up` build it (or `make docker-build`).
+- **Registry**: `make docker-buildx DOCKER_REGISTRY=ghcr.io/veloriba` once, then on the VPS `docker pull ghcr.io/veloriba/mygrok:<version>`.
+- **Offline / air-gapped**: on any machine `make docker-save` → transfer `dist/mygrok-<version>-<arch>.tar` → `docker load -i mygrok-<version>-<arch>.tar`. For a **different target architecture** than the build machine (e.g. building on an arm64 laptop for an amd64 VPS):
+  ```bash
+  docker buildx build --platform linux/amd64 -f deploy/docker/Dockerfile \
+    --build-arg VERSION=$(cat VERSION) -t mygrok:$(cat VERSION) --load .
+  docker save mygrok:$(cat VERSION) | gzip > mygrok-$(cat VERSION)-amd64.tar.gz
+  # transfer, then on the VPS: docker load -i mygrok-<version>-amd64.tar.gz
+  ```
+
+**Certificate** (see [SSL & Nginx](#2-ssl--nginx)): after issuing the wildcard cert on the VPS host, copy it into the stack:
+
+```bash
+sudo cp /etc/letsencrypt/live/DOMAIN/fullchain.pem /etc/letsencrypt/live/DOMAIN/privkey.pem deploy/docker/certs/
+```
 
 Published ports: `7000/tcp` (clients dial in), `80`/`443` (public HTTPS via nginx), `20000-20099` tcp+udp (auto-assigned tunnel ports). The raw HTTP front (`:8080`) stays **inside** the compose network — nginx is the only public entry point.
 
@@ -55,6 +73,16 @@ make server-install
 ```
 
 This cross-compiles `mygrok-server`, uploads it over SSH, and installs a systemd unit that reads the token from a `0600` EnvironmentFile (it never appears in `ps`).
+
+### 1b. Upgrading / migrating the server
+
+- **Docker stack**: update the image (rebuild from a new repo version, `docker pull`, or `docker load` a new tarball), then run the same `up -d` command — it recreates the containers. Keep `DOMAIN` and `MYGROK_TOKEN` unchanged.
+- **Bare binary**: re-run `make server-install` — it is idempotent (backs up the old binary, stops the service, swaps, restarts).
+- **Migrating from a binary install to Docker** (or the reverse): stop and disable the old mechanism first (`sudo systemctl disable --now mygrok`, and stop the host nginx if the Docker sidecar should own 80/443), carry over the token (the old `/etc/mygrok/<unit>.env` file or your `config.mk`) and the existing Let's Encrypt certificate, then follow the other mode's steps. Remove the old unit/binary only after the new stack has proven itself.
+
+No client-side changes are ever needed: every client auto-reconnects (exponential backoff, capped at 30s) and re-registers its tunnel, so the whole fleet is back within ~30s of the new server listening. If a tcp/udp client was started with an explicit `--public-port`, it reclaims the same port; clients relying on auto-assignment may get a different port from the range — prefer `--public-port` for tunnels that have hardcoded consumers.
+
+Renew the wildcard certificate before it expires (`make cert-renew` in binary mode, or certbot on the host in Docker mode — then copy it into `certs/` and `docker compose --env-file .env.server -f docker-compose.server.yml exec nginx nginx -s reload`).
 
 ### 2. SSL & Nginx
 

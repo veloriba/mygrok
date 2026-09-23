@@ -11,6 +11,14 @@ docker compose up -d
 docker compose ps
 ```
 
+**Getting the image.** This example's compose file builds the image on first `up`
+when it sits inside a mygrok repo checkout (`context: ../../`). Otherwise,
+provide the image yourself — build from the repo root
+(`docker build -f deploy/docker/Dockerfile --build-arg VERSION=0.3.0 -t mygrok:0.3.0 .`),
+pull it from a registry, or `docker load -i mygrok-0.3.0-<arch>.tar`
+(from `make docker-save`) — then delete the `build:` block and point
+`image:` at the loaded tag.
+
 **Certs (wildcard, required).** HTTP-01 cannot issue wildcards, so use
 DNS-01 — either on the host:
 
