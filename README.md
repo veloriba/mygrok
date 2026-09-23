@@ -8,108 +8,197 @@
 
 A minimal, high-performance ngrok clone for personal use. Built with Go and powered by [yamux](https://github.com/hashicorp/yamux) for robust connection multiplexing and [httputil](https://pkg.go.dev/net/http/httputil) for reliable reverse proxying with **full WebSocket support**.
 
-Expose your local development servers (Next.js, React, etc.) to the internet through your own VPS with a single command. Support for custom subdomains and automated TUI dashboard.
+Run your own tunnel server on a VPS and expose local development servers (Next.js, React, LLM gateways), SSH, RDP, or any TCP/UDP port to the internet — over a single multiplexed connection, with HTTPS, custom subdomains, and a live TUI dashboard.
+
+<p align="center">
+  <img src="docs/img/tui.png" alt="mygrok client TUI" width="720" />
+</p>
 
 ---
 
 ## ✨ Features
 
-- **Personal Infrastructure**: Total control over your data and domain.
-- **Multiplexed**: Multiple concurrent HTTP requests over a single TCP connection.
-- **WebSocket & HMR Support**: Works perfectly with Next.js, Webpack HMR, and real-time apps.
-- **Streaming (SSE) Friendly**: Long-lived streamed responses (e.g. LLM token streams) are never cut off by write timeouts.
-- **Wildcard SSL Support**: Full HTTPS support using Let's Encrypt wildcard certificates.
-- **TUI Dashboard**: Real-time request logging, status monitoring, and URL display.
-- **Resilient**: Clients auto-reconnect with exponential backoff + jitter; the server tears tunnels down deterministically so a wedged session can't leak.
-- **Observability**: Loopback-only `/_mygrok/stats` endpoint exposing live tunnel, in-flight, and runtime metrics.
-- **Structured Logging**: `log/slog` with levels and fields (`--log-level`, `--log-format json`) on both client and server.
-- **Zero Dependencies**: Single binary for client and server.
-- **Docker-First**: Minimal `scratch`-based image (linux/amd64 + linux/arm64) with a Compose template — one image runs on every client host (Linux, macOS, Windows via Docker Desktop).
+- **Personal Infrastructure**: total control over your data, domain, and server.
+- **Docker-First**: one minimal `scratch` image contains **both** the client and the server binaries (`linux/amd64` + `linux/arm64`) — run either role on Linux, macOS, or Windows (Docker Desktop). Bare static binaries remain a first-class alternative.
+- **Multiplexed**: multiple concurrent HTTP requests over a single TCP connection (yamux).
+- **WebSocket & HMR support**: works perfectly with Next.js, Webpack HMR, and real-time apps (connection hijack + raw splice).
+- **Streaming (SSE) friendly**: no `WriteTimeout` on the proxy path — LLM token streams are never cut off.
+- **TCP & UDP tunnels**: auto-assigned public ports (default range 20000–20099) for SSH, RDP, game servers, anything.
+- **Wildcard SSL support**: full HTTPS via Let's Encrypt wildcard certificates (DNS-01).
+- **TUI dashboard**: real-time request log, traffic counters, and tunnel URLs.
+- **Resilient**: clients auto-reconnect with exponential backoff + jitter; the server tears tunnels down deterministically so a wedged session can't leak.
+- **Observability**: loopback-only `/stats` + `/healthz` endpoints with live tunnel, in-flight, and runtime metrics.
+- **Structured logging**: `log/slog` with levels and fields (`--log-level`, `--log-format json`) on both client and server.
 
 ## 🚀 Quick Start
 
-### 1. Server Setup (Ubuntu VPS)
+### 1. Run the server
 
-1.  **Build and Install**:
-    Initialize your `config.mk` (copy from `config.mk.example`) and run:
-    ```bash
-    make server-install
-    ```
-    This will build the binary, deploy it to your VPS, and set up a systemd service.
+**Docker (recommended).** The server stack is `mygrok-server` + an nginx TLS front in one compose file:
 
-2.  **Nginx & SSL Configuration**:
-    Follow the instructions in the [Wiki/SSL Section] to obtain a wildcard certificate using `certbot` and configure Nginx to proxy traffic to port 8080.
+```bash
+cd deploy/docker
+cp .env.server.example .env.server      # set DOMAIN and MYGROK_TOKEN
+mkdir -p certs                          # drop fullchain.pem + privkey.pem (wildcard cert)
+docker compose --env-file .env.server -f docker-compose.server.yml up -d
+```
 
-### 2. Client Usage (Docker Compose, recommended)
+Or from the repo root: `make docker-server-up` / `docker-server-status` / `docker-server-logs SERVICE=mygrok-server`.
 
-The recommended way to run client tunnels is Docker Compose: every tunnel is a container, so `docker ps` shows all proxies at a glance, `docker logs -f <name>` streams logs, and crashed tunnels restart automatically. One `linux/amd64`/`linux/arm64` image covers Linux, macOS, and Windows (Docker Desktop) hosts — no per-OS binaries or WSL hacks needed.
+Published ports: `7000/tcp` (clients dial in), `80`/`443` (public HTTPS via nginx), `20000-20099` tcp+udp (auto-assigned tunnel ports). The raw HTTP front (`:8080`) stays **inside** the compose network — nginx is the only public entry point.
 
-1.  **Configure environment**:
-    ```bash
-    cp deploy/docker/.env.example deploy/docker/.env
-    # edit deploy/docker/.env: MYGROK_SERVER, MYGROK_TOKEN
-    ```
-2.  **Start tunnels** (the minimal `scratch`-based image is built on first run):
-    ```bash
-    make docker-up
-    ```
-    Add more tunnels by adding services to `deploy/docker/docker-compose.client.yml` (one service per tunnel, see the commented `ssh` example).
-3.  **Day-to-day**:
-    ```bash
-    make docker-status          # all tunnels at a glance
-    make docker-logs SERVICE=api
-    make docker-down
-    ```
-    On air-gapped hosts, build once and transfer: `make docker-save` → `docker load -i mygrok-<ver>-<arch>.tar`.
+**Bare binary (alternative).** Build and install as a systemd service on an Ubuntu VPS:
+
+```bash
+cp config.mk.example config.mk          # fill SERVER_HOST/SERVER_USER/DOMAIN/TOKEN/SUDO_PWD
+make server-install
+```
+
+This cross-compiles `mygrok-server`, uploads it over SSH, and installs a systemd unit that reads the token from a `0600` EnvironmentFile (it never appears in `ps`).
+
+### 2. SSL & Nginx
+
+HTTP tunnels are served on **443** through a wildcard TLS front-end: nginx terminates TLS (Let's Encrypt wildcard certificate for `*.yourdomain.com`) and proxies to `mygrok-server:8080`; mygrok dispatches each request to the right tunnel by the `Host` header.
+
+- **Docker stack**: the nginx sidecar is already wired up — just provide the wildcard certificate in `./certs/` (see the compose header comments).
+- **Bare VPS**: start from [`deploy/nginx/mygrok-nginx.conf.example`](deploy/nginx/mygrok-nginx.conf.example) — it includes the `proxy_buffering off` directive required for SSE/LLM streaming and the canonical `map`-based WebSocket upgrade handling.
+
+Obtain the wildcard certificate with a manual DNS-01 challenge (or `make cert-renew`):
+
+```bash
+sudo certbot certonly --manual --preferred-challenges dns -d "*.yourdomain.com"
+```
+
+> Wildcard certificates cannot be issued by the HTTP-01 challenge, hence the manual DNS TXT record step.
+
+### 3. Firewall
+
+Only these ports need to be open on the VPS (e.g. `ufw`):
+
+```bash
+sudo ufw allow 22/tcp                 # your SSH
+sudo ufw allow 7000/tcp               # mygrok control (clients dial in)
+sudo ufw allow 80,443/tcp             # public HTTP/HTTPS front
+sudo ufw allow 20000:20099/tcp        # tcp tunnels
+sudo ufw allow 20000:20099/udp        # udp tunnels
+```
+
+Keep `8080` **closed** to the world — nginx proxies to it locally. Expect occasional `handshake decode failed` warnings in the server log: internet scanners probing the public control port. They are harmless (the connection is dropped), but if you want less noise, rate-limit or allow-list port 7000 in your firewall.
+
+### 4. Expose a local port
+
+**Docker (recommended).** Every tunnel is a container: `docker ps` shows all proxies at a glance, `docker logs -f <name>` streams logs, and crashed tunnels restart automatically.
+
+```bash
+cd deploy/docker
+cp .env.example .env                  # set MYGROK_SERVER, MYGROK_TOKEN
+make docker-up                        # or: docker compose -f deploy/docker/docker-compose.client.yml up -d
+```
+
+Add more tunnels by adding services to `docker-compose.client.yml` (one service per tunnel — see the commented `ssh` example). On air-gapped hosts, build once and transfer: `make docker-save` → `docker load -i mygrok-<version>-<arch>.tar`.
+
+**Bare binary (alternative).**
+
+```bash
+export MYGROK_SERVER="yourdomain.com:7000"
+export MYGROK_TOKEN="your-secret-token"
+make build && ./bin/mygrok http 3000 my-app
+```
+
+The client TUI shows the public URL as soon as the tunnel is up.
 
 ### Per-project tunnels: the `task` CLI
 
-For "one tunnel per project" setups, the `task` binary scaffolds and manages a
-self-contained `mygrok/` folder inside any project directory:
+For "one tunnel per project" setups, the `task` binary scaffolds and manages a self-contained `mygrok/` folder inside any project directory:
 
 ```bash
-make task                                  # build bin/task (install: cp bin/task /usr/local/bin/mgrok-task)
-mgrok-task config set                     # one-time: store MYGROK_SERVER / MYGROK_TOKEN in ~/.config/mygrok/env
+make task                                        # build bin/mgrok-task (install: cp bin/mgrok-task /usr/local/bin/mgrok-task)
+mgrok-task config set                            # one-time: store MYGROK_SERVER / MYGROK_TOKEN in ~/.config/mygrok/env
 mgrok-task add ~/dev/myapp --port 3000 --sub my-app
 mgrok-task add ~/dev/mygame --port 8123 --sub mygame --network proxy --local-host mygame
+mgrok-task add ~/dev/mybox --proto tcp --port 22 --sub ssh --public-port 2222
 mgrok-task up|down|status|logs ~/dev/myapp
 ```
 
-`add` generates `<dir>/mygrok/docker-compose.yml` (project `mygrok-<sub>`,
-container `mygrok_<sub>`, `restart: unless-stopped`) and `<dir>/mygrok/.env`
-(server + token, mode 0600). `--network <name>` joins an existing docker
-network instead of `network_mode: host` (use `--local-host <container>` to
-target a service on that network).
+`add` generates `<dir>/mygrok/docker-compose.yml` (project `mygrok-<sub>`, container `mygrok_<sub>`, `restart: unless-stopped`) and `<dir>/mygrok/.env` (server + token, mode `0600`). `--network <name>` joins an existing docker network instead of `network_mode: host` (use `--local-host <container>` to target a service on that network); `--proto https` adds `--insecure` for self-signed local upstreams.
 
-### 3. Client Usage (bare binary)
+### Runnable examples
 
-1.  **Configure environment**:
-    ```bash
-    export MYGROK_SERVER="yourdomain.com:7000"
-    export MYGROK_TOKEN="your-secret-token"
-    ```
-2.  **Expose a local port**:
-    ```bash
-    ./bin/mygrok http 3000 my-app
-    ```
-    Or using Makefile:
-    ```bash
-    make run PORT=3000 SUB=my-app
-    ```
+[`docker_run_examples/`](docker_run_examples/) contains self-contained, copy-paste examples — client (http / tcp / multi-service) and server (with nginx / minimal), each with its own compose file, `.env.example`, and a `docker run` one-liner equivalent:
+
+| Example | What it shows |
+| --- | --- |
+| `01-client-http` | expose a local HTTP port (host network) |
+| `02-client-tcp` | forward a TCP port (e.g. SSH on `--public-port 2222`) |
+| `03-client-multi` | several tunnels on one host (host network + shared docker network) |
+| `04-server-nginx` | full server stack: `mygrok-server` + nginx TLS front |
+| `05-server-minimal` | server without a TLS front (tcp/udp tunnels, private networks) |
+
+## 🧠 Use Cases
+
+### Expose a local LLM gateway
+
+Publish an OpenAI-compatible gateway (e.g. [LiteLLM](https://github.com/BerriAI/litellm) on `:4000`) from a home or dev box through your server. Because mygrok leaves `WriteTimeout` unset, **token-by-token streaming (SSE) works end to end**:
+
+```bash
+# On the gateway host (OpenAI-compatible server on :4000)
+docker run --rm --network host -e MYGROK_TOKEN=... mygrok:0.3.0 \
+  mygrok http 4000 llm --server yourdomain.com:7000 --no-tui
+```
+
+Then call it from anywhere through the wildcard TLS front-end:
+
+```bash
+curl https://llm.yourdomain.com/v1/chat/completions \
+  -H "Authorization: Bearer sk-..." -H "Content-Type: application/json" \
+  -d '{"model":"qwen","messages":[{"role":"user","content":"hi"}],"stream":true}'
+```
+
+> When fronting long-lived streams through nginx, keep `proxy_buffering off` (it is in the provided nginx templates) so intermediate buffering doesn't stall token delivery.
+
+### Remote access: SSH / RDP / anything TCP
+
+```bash
+# tunnel local sshd :22 to public port 2222
+docker run --rm --network host -e MYGROK_TOKEN=... mygrok:0.3.0 \
+  mygrok tcp 22 ssh --server yourdomain.com:7000 --public-port 2222 --no-tui
+
+# from anywhere:
+ssh -p 2222 your-user@yourdomain.com
+```
+
+The same works for RDP, VNC, game servers, or any raw TCP service; UDP tunnels use the identical command with `udp`.
+
+### Dev preview with hot reload
+
+```bash
+docker run --rm --network host -e MYGROK_TOKEN=... mygrok:0.3.0 \
+  mygrok http 3000 preview --server yourdomain.com:7000 --no-tui
+```
+
+WebSockets and HMR (Next.js, Vite) work out of the box — share `https://preview.yourdomain.com` with anyone.
+
+### Many services, one host
+
+Run one tunnel container per service (see `docker_run_examples/03-client-multi`): `docker compose ps` becomes your fleet dashboard, and each tunnel reconnects and restarts independently.
+
+<p align="center">
+  <img src="docs/img/composeps.png" alt="docker compose ps with mygrok tunnels" width="720" />
+</p>
 
 ## 🛠 Makefile Commands
 
-- `make build`: Build both client and server binaries.
-- `make test`: Run integration and unit tests.
-- `make server-install`: Deploy server to VPS.
-- `make server-status`: Check remote service status.
-- `make cert-renew`: Trigger manual wildcard certificate renewal.
-- `make run PORT=3000 SUB=name`: Launch client using `config.mk` settings.
-- `make docker-build`: Build the Docker image (current platform, tag from `VERSION`).
-- `make docker-buildx DOCKER_REGISTRY=ghcr.io/veloriba`: Build linux/amd64+arm64 and push.
-- `make docker-save`: Export image tarball for offline transfer.
-- `make docker-up` / `docker-down` / `docker-status` / `docker-logs SERVICE=<name>`: Manage client tunnels from `deploy/docker/docker-compose.client.yml`.
-- `make task`: Build the `mgrok-task` CLI for per-project tunnel scaffolding.
+- `make build`: build client, server, and task binaries.
+- `make test`: run integration and unit tests.
+- `make server-install` / `server-status` / `server-uninstall`: deploy and manage the server on a VPS (binary mode).
+- `make cert-renew`: trigger manual wildcard certificate renewal.
+- `make run PORT=3000 SUB=name`: launch the client using `config.mk` settings.
+- `make docker-build`: build the Docker image (current platform, tag from `VERSION`).
+- `make docker-buildx DOCKER_REGISTRY=ghcr.io/veloriba`: build linux/amd64+arm64 and push.
+- `make docker-save`: export an image tarball for offline transfer.
+- `make docker-up` / `docker-down` / `docker-status` / `docker-logs SERVICE=<name>`: manage client tunnels from `deploy/docker/docker-compose.client.yml`.
+- `make docker-server-up` / `docker-server-down` / `docker-server-status` / `docker-server-logs SERVICE=<name>`: manage the server stack from `deploy/docker/docker-compose.server.yml`.
+- `make task`: build the `mgrok-task` CLI for per-project tunnel scaffolding.
 
 ## 🛠 Configuration
 
@@ -121,13 +210,13 @@ target a service on that network).
 | `--token` | `MYGROK_TOKEN` | **Required**. Authentication secret token |
 | `--config` | — | Path to a profile `config.json` (default: `config.json` next to the binary) |
 | `--public-port` | — | Requested public port for `tcp`/`udp` tunnels (`0` = auto-assign) |
-| `--no-tui` | — | Run headless; logs lifecycle events to stderr (for systemd/journal) |
+| `--no-tui` | — | Run headless; logs lifecycle events to stderr (for systemd/journal/compose) |
 | `-v`, `--verbose` | — | Debug logging (equivalent to `--log-level debug`) |
 | `--log-level` | `MYGROK_LOG_LEVEL` | `debug` \| `info` (default) \| `warn` \| `error` |
 | `--log-format` | `MYGROK_LOG_FORMAT` | `text` (default) \| `json` |
 | — | `MYGROK_RECONNECT_SEC` | Base reconnect interval in seconds (default `5`; backoff grows from here) |
 | `--flush-interval` | `MYGROK_FLUSH_INTERVAL` | How often the reverse proxy flushes the response to the tunnel: `-1` (default) after every write (low-latency streaming), `0` only on completion, or a duration (e.g. `100ms`) for periodic flushes |
-| `--local-host` | `MYGROK_LOCAL_HOST` | Local host to forward to (default `127.0.0.1`; use a container/non-loopback IP as needed) |
+| `--local-host` | `MYGROK_LOCAL_HOST` | Local host to forward to (default `127.0.0.1`; use a container name, or `host.docker.internal` on Docker Desktop) |
 | `--insecure` | `MYGROK_INSECURE` | Skip TLS certificate verification for the local upstream (for self-signed certs, e.g. the `https` subcommand) |
 | `--set-header` | — | Inject a static `Key: Value` header into every proxied request (repeatable for multiple headers) |
 | `--upstream-timeout` | `MYGROK_UPSTREAM_TIMEOUT` | Timeout for receiving response headers from the local upstream (default `0` = no timeout) |
@@ -160,7 +249,11 @@ WARN  subdomain takeover, closing old session conn=c9 ... old_conn=c1 old_age=4h
 INFO  tunnel closed conn=c9 subdomain=my-app served=18234 duration=31m2s
 ```
 
-Every tunnel logs a correlation `conn` id plus the client `remote` address, so a full connect → serve → disconnect lifecycle can be traced in one `journalctl` query. Use `--log-format json` to ship structured logs to an aggregator, and `-v` when diagnosing.
+Every tunnel logs a correlation `conn` id plus the client `remote` address, so a full connect → serve → disconnect lifecycle can be traced in one `journalctl` query. Use `--log-format json` to ship structured logs to an aggregator (as in the compose templates), and `-v` when diagnosing:
+
+<p align="center">
+  <img src="docs/img/jsonlogs.png" alt="mygrok JSON logs" width="720" />
+</p>
 
 ## 📊 Observability
 
@@ -171,12 +264,14 @@ curl -s http://127.0.0.1:7001/stats | jq
 curl -s http://127.0.0.1:7001/healthz
 ```
 
+(In the Docker stack the admin listener stays inside the container on `127.0.0.1:7001` and is not published. To query it remotely, pass `-admin 0.0.0.0:7001 -admin-token <token>` to `mygrok-server` and publish `7001` — the token is then required for all callers.)
+
 `/stats` returns live operational state:
 
 ```json
 {
   "now": "2026-09-06T11:00:00Z",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "uptime": "6h23m10s",
   "tunnels": 2,
   "inflight_requests": 0,
@@ -198,38 +293,28 @@ Rough figures measured on real traffic (an idle server fronting 6 tunnels):
 | Component | Resident (RSS) | Notes |
 | --- | --- | --- |
 | `mygrok-server` | ~9 MB | Single static Go binary, ~38 goroutines at rest. Grows by a few MB under concurrent streams, then frees on idle. |
-| `mygrok-client` | ~8–9 MB each | One process per tunnel; negligible CPU between requests. |
+| `mygrok` (client) | ~8–9 MB each | One process per tunnel; negligible CPU between requests. |
 
-- Both are **statically linked Go binaries** with no runtime dependencies.
+- Both are **statically linked Go binaries** with no runtime dependencies; the Docker image is a `scratch`-based ~10 MB layer on top of the Go toolchain build.
 - `top`/`ps` will show ~1.2 GB **VIRT/VSZ** — that's Go's reserved **virtual address space** (arena hint), **not** physical memory. Watch **RSS**, not VIRT.
 - Check live numbers yourself via the stats endpoint: `curl -s localhost:7001/stats | jq .runtime` (`heap_alloc_mb`, `sys_mb`, `goroutines`).
 - For context: a prior build leaked yamux streams and crept up to ~145 MB over several days; the current build stays flat at ~9 MB (see [CHANGELOG](CHANGELOG.md)).
 
-## 🧠 Example: expose a local LLM gateway
+## 🏗 Architecture
 
-A common real-world use is publishing an OpenAI-compatible gateway (e.g. [LiteLLM](https://github.com/BerriAI/litellm) on `:4000`) from a home/dev box through a public server. Because mygrok leaves `WriteTimeout` unset, **token-by-token streaming (SSE) works end to end**:
-
-```bash
-# On the gateway host (e.g. an OpenAI-compatible server listening on :4000)
-export MYGROK_SERVER="example.com:7000"
-export MYGROK_TOKEN="your-secret-token"
-mygrok http 4000 my-app
+```text
+[User Browser] -> [Nginx :443] -> [mygrok-server :8080]   [operator] -> [:7001 /stats (loopback)]
+                                           |
+                                     (Yamux Stream)
+                                           |
+[mygrok client] <- (Control :7000) -------'
+         |
+[Local App :3000] (HTTP / WebSocket / SSE streaming / TCP / UDP)
 ```
 
-Then call it from anywhere through the wildcard TLS front-end:
-
-```bash
-curl https://my-app.example.com/v1/chat/completions \
-  -H "Authorization: Bearer sk-..." \
-  -H "Content-Type: application/json" \
-  -d '{"model":"qwen","messages":[{"role":"user","content":"hi"}],"stream":true}'
-```
-
-Run it as a service (`--no-tui`) so it reconnects automatically and logs to the journal:
-
-```bash
-mygrok --no-tui http 4000 my-app
-```
+> **Access by protocol:**
+> - **HTTP tunnels** — always on port **443** via the nginx front-end (`https://subdomain.yourdomain.com`). No port assignment; nginx routes by `Host` header to mygrok `:8080`.
+> - **TCP/UDP tunnels** — auto-assigned a public port from the `-port-base`/`-port-count` range (default 20000–20099). Access via `subdomain.yourdomain.com:PORT` or `your-vps-ip:PORT`. The subdomain is optional; both resolve to the same tunnel.
 
 ## 🩺 Troubleshooting
 
@@ -237,28 +322,15 @@ mygrok --no-tui http 4000 my-app
 | --- | --- | --- |
 | Tunnel flaps / reconnects repeatedly | Server data path wedged or client unreachable | `curl -s localhost:7001/stats` → high `inflight_requests` / `goroutines`; server log `keepalive failed` |
 | `502`/timeout on a subdomain | Client offline or wrong subdomain | `GET /stats` → is the subdomain present with a recent `since`? |
+| Client can't connect from Docker Desktop (macOS/Windows) | `127.0.0.1` inside the container is not the host loopback | Point `MYGROK_SERVER` at `host.docker.internal:7000`, or use a shared docker network + `--local-host host.docker.internal` |
+| LLM/SSE streams arrive in bursts instead of token-by-token | Response buffering in an intermediate proxy | Ensure `proxy_buffering off` in your nginx config (included in the provided templates) |
+| `handshake decode failed` spam in server log | Internet scanners hitting the public control port | Harmless — connections are dropped. Optionally rate-limit/allow-list port 7000 in the firewall |
 | Client never reconnects fast enough | Frequent transient drops | Raise/fall `MYGROK_RECONNECT_SEC`; watch `attempt`/`reconnect_in` in logs |
 | Can't reach `/stats` from remote | Loopback-only by design | Set `-admin-token`, or `ssh -L 7001:127.0.0.1:7001 your-vps` and curl locally |
 
-## 🏗 Architecture
-
-```text
-[User Browser] -> [Nginx :443] -> [mygrok-server :8080]   [operator] -> [:7001 /stats (loopback)]
-                                          |
-                                    (Yamux Stream)
-                                          |
-[mygrok-client] <- (Control :7000) ------'
-        |
-[Local App :3000] (HTTP / WebSocket / SSE streaming / TCP / UDP)
-```
-
-> **Access by protocol:**
-> - **HTTP tunnels** — always on port **443** via the nginx front-end (`https://subdomain.yourdomain.com`). No port assignment; nginx routes by `Host` header to mygrok `:8080`.
-> - **TCP/UDP tunnels** — auto-assigned a public port from the `-port-base`/`-port-count` range (default 20000–20100). Access via `subdomain.yourdomain.com:PORT` or `your-vps-ip:PORT`. The subdomain is optional; both resolve to the same tunnel.
-
 ## 🤝 Contributing
 
-Contributions are welcome! Please feel free to submit a Pull Request.
+Contributions are welcome! Please feel free to submit a Pull Request. Run `make test` and `make build` before submitting; keep tracked files free of any real hostnames, domains, or tokens.
 
 ## 💖 Support the Project
 

@@ -4,7 +4,13 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-09-23
+
 ### Added
+- Docker deployment for the **server**: `deploy/docker/docker-compose.server.yml` runs `mygrok-server` behind an nginx TLS sidecar (wildcard cert mounted from `./certs/`, `proxy_buffering off` for SSE/LLM streaming, canonical `map`-based WebSocket upgrade handling). Published ports: 7000 (control), 80/443 (public front), 20000-20099 tcp+udp (tunnel ports); the raw `:8080` front stays inside the compose network. Plus `deploy/docker/.env.server.example` and Makefile targets `docker-server-build/up/down/status/logs`.
+- `deploy/nginx/mygrok-nginx.conf.example`: a bare-VPS nginx template (wildcard `server_name`, HTTP→HTTPS redirect, ACME challenge location) for deployments without the compose stack.
+- `docker_run_examples/`: five self-contained, placeholder-only examples — client (http, tcp, multi-service on shared networks) and server (with nginx, minimal) — each with compose + `.env.example` + a `docker run` one-liner, and an index README.
+- Regression tests: `TestSubdomainFromHost` (host-header edge cases) and `TestBuildCommandArgs` (mgrok-task client argument assembly).
 - `mgrok-task` CLI (`cmd/task`, built via `make task`): scaffolds and manages per-project tunnels. `mgrok-task add <dir> --port <n> --sub <name>` creates `<dir>/mygrok/{docker-compose.yml,.env}` (project `mygrok-<sub>`, container `mygrok_<sub>`, `restart: unless-stopped`); `up`/`down`/`status`/`logs` drive it. `mgrok-task config set` stores `MYGROK_SERVER`/`MYGROK_TOKEN`/`MYGROK_TAG` in `~/.config/mygrok/env` (mode 0600). `--network <name>` + `--local-host <container>` target services on an existing docker network instead of `network_mode: host`.
 - Docker deployment for client tunnels (recommended way to run clients): `deploy/docker/Dockerfile` (multi-stage, static Go build, `scratch` final image, non-root, ~7 MB) and `deploy/docker/docker-compose.client.yml` with a `.env.example` — one tunnel per service, `network_mode: host`, `restart: unless-stopped`. A single linux/amd64+arm64 image covers Linux, macOS, and Windows (Docker Desktop) hosts, replacing per-OS binaries and WSL setups.
 - Makefile Docker targets: `docker-build` (current platform), `docker-buildx` (multi-arch push to a registry), `docker-save` (offline tarball in `dist/`), and `docker-up` / `docker-down` / `docker-status` / `docker-logs SERVICE=<name>` for day-to-day management.
@@ -23,10 +29,15 @@ All notable changes to this project will be documented in this file.
 - Client flag `--upstream-timeout` (env `MYGROK_UPSTREAM_TIMEOUT`, default `0` = no timeout) sets the timeout for receiving response headers from the local upstream (the transport's `ResponseHeaderTimeout`). Together with `--local-host`, `--insecure`, and `--set-header`, these round out the client's upstream controls.
 
 ### Changed
+- The Docker image now contains **both** binaries (`mygrok` client and `mygrok-server`) in one `scratch` image; compose files and `docker run` select the role via the command. `docker-buildx` publishes both under the same tag.
+- README reworked: Docker is now the recommended (not required) way to run both server and client; added Use Cases, SSL & Nginx (pointing at `deploy/nginx/mygrok-nginx.conf.example` instead of the dead wiki link), and Firewall sections.
+- `mgrok-task`: the `--scheme` flag is gone; `--insecure` is derived from `--proto https` (a local upstream that speaks TLS is assumed self-signed in dev).
 - Client reconnect now uses exponential backoff with jitter (base = `MYGROK_RECONNECT_SEC` / 5s, capped at 30s, reset after a healthy session) instead of a fixed 5s retry, avoiding a thundering-herd of simultaneous reconnects after a server restart.
 - HTTP tunneling reuses one per-tunnel `http.Transport` with `DisableKeepAlives` (a single yamux stream opened and closed per request) instead of constructing a fresh transport per request.
 
 ### Fixed
+- Server: subdomain extraction from the `Host` header now requires a dot separator (a host like `subex.com` can no longer be misparsed as a subdomain of the domain `ex.com`) and tolerates a port suffix (`sub.example.com:8080` on the raw front now routes correctly instead of 404-ing).
+- `.dockerignore` added so local artifacts (`bin/`, `dist/`, `.git/`, gitignored env files) never enter the Docker build context.
 - `scripts/install-client.sh`: pre-install `pkill -f mygrok-client` matched its own remote wrapper shell and killed it mid-run, aborting the script (now uses a bracket pattern that cannot self-match).
 - `scripts/install-client.sh`: unit installation piped content into `echo "$SUDO_PWD" | sudo -S tee <unit>`, so tee only ever received the password line — an empty ("masked") 0-byte unit file was installed. The rendered unit is now staged over ssh stdin and installed with `sudo cp`.
 - Server: fixed a regression where HTTP requests routed by hostname to a **`tcp`-protocol tunnel** (e.g. a vllm server reached via `https://<sub>.domain/v1`) panicked with `transport is nil` — the proxy transport was only created for `http`-protocol tunnels. A transport is now created for every tunnel (with a defensive nil-guard in `ServeHTTP`), restoring the previous behavior of proxying HTTP over any tunnel's session. Covered by `TestHTTPRequestToTCPTunnel`.

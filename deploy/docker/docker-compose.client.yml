@@ -23,12 +23,12 @@ name: mygrok
 services:
   # Example: expose local HTTP on port 3000 as https://api.example.com
   api:
-    image: mygrok:${MYGROK_TAG:-0.2.0}
+    image: mygrok:${MYGROK_TAG:-0.3.0}
     build:
       context: ../..
       dockerfile: deploy/docker/Dockerfile
       args:
-        VERSION: ${MYGROK_TAG:-0.2.0}
+        VERSION: ${MYGROK_TAG:-0.3.0}
     command: ["mygrok", "http", "3000", "api", "--server", "${MYGROK_SERVER}", "--no-tui", "--log-format", "json"]
     environment:
       MYGROK_TOKEN: ${MYGROK_TOKEN}
@@ -37,7 +37,7 @@ services:
 
   # Example: expose a local TCP port (e.g. SSH on 22). Uncomment to enable.
   # ssh:
-  #   image: mygrok:${MYGROK_TAG:-0.2.0}
+  #   image: mygrok:${MYGROK_TAG:-0.3.0}
   #   command: ["mygrok", "tcp", "22", "ssh", "--server", "${MYGROK_SERVER}", "--no-tui", "--log-format", "json"]
   #   environment:
   #     MYGROK_TOKEN: ${MYGROK_TOKEN}
