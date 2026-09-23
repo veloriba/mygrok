@@ -10,8 +10,11 @@
 #   docker compose --env-file .env.server -f docker-compose.server.yml logs -f mygrok-server
 # (or `make docker-server-up|down|status|logs SERVICE=mygrok-server` from the repo root)
 #
-# Ports: 7000 (control, clients dial in), 80/443 (public HTTP via nginx),
-# 20000-20099 (auto-assigned tcp/udp tunnel ports).
+# Ports (bound directly on the host via network_mode: host — publishing 200
+# ports through docker-proxy is slow and can destabilize small hosts):
+#   ${MYGROK_CONTROL_ADDR:-:7000}  control, clients dial in
+#   ${MYGROK_HTTP_ADDR:-127.0.0.1:8080}  HTTP front — loopback by default, nginx is the only public entry
+#   ${MYGROK_PORT_BASE:-20000}+${MYGROK_PORT_COUNT:-100}  auto-assigned tcp/udp tunnel ports
 # TLS: put a wildcard certificate for *.DOMAIN into ./certs/
 # (fullchain.pem + privkey.pem) — see the "SSL & Nginx" section in README.md.
 #
@@ -29,16 +32,12 @@ services:
       dockerfile: deploy/docker/Dockerfile
       args:
         VERSION: ${MYGROK_TAG:-0.3.0}
-    command: ["mygrok-server", "-domain", "${DOMAIN}", "-control", "0.0.0.0:7000", "-http", "0.0.0.0:8080", "-log-format", "json"]
+    network_mode: host
+    command: ["mygrok-server", "-domain", "${DOMAIN}", "-control", "${MYGROK_CONTROL_ADDR:-:7000}", "-http", "${MYGROK_HTTP_ADDR:-127.0.0.1:8080}", "-port-base", "${MYGROK_PORT_BASE:-20000}", "-port-count", "${MYGROK_PORT_COUNT:-100}", "-log-format", "json"]
     environment:
       MYGROK_TOKEN: ${MYGROK_TOKEN}
-    ports:
-      - "7000:7000/tcp"
-      - "20000-20099:20000-20099/tcp"
-      - "20000-20099:20000-20099/udp"
-    # 8080 is intentionally NOT published: nginx (below) is the only front.
-    # The admin/stats listener stays on 127.0.0.1:7001 inside the container
-    # (loopback-only by default; `docker exec` in to use it).
+    # The admin/stats listener is 127.0.0.1:7001 on the host itself
+    # (loopback-only by default): `curl http://127.0.0.1:7001/stats` from the VPS.
     restart: unless-stopped
 
   nginx:
@@ -49,6 +48,8 @@ services:
     ports:
       - "80:80"
       - "443:443"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
       - mygrok-server
     restart: unless-stopped

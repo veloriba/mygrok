@@ -78,7 +78,7 @@ Or from the repo root: `make docker-server-up` / `docker-server-status` / `docke
 sudo cp /etc/letsencrypt/live/DOMAIN/fullchain.pem /etc/letsencrypt/live/DOMAIN/privkey.pem deploy/docker/certs/
 ```
 
-Published ports: `7000/tcp` (clients dial in), `80`/`443` (public HTTPS via nginx), `20000-20099` tcp+udp (auto-assigned tunnel ports). The raw HTTP front (`:8080`) stays **inside** the compose network — nginx is the only public entry point.
+The server container runs with `network_mode: host` and binds directly on the VPS: `7000/tcp` (clients dial in), `20000-20099` tcp+udp (auto-assigned tunnel ports), and the raw HTTP front `127.0.0.1:8080` (**loopback** by default — override via `MYGROK_HTTP_ADDR`). Nginx (bridge network) is the only public entry point for HTTP tunnels: `80`/`443`. Ports are host-wide — do not run another service on them while the stack is up.
 
 **Bare binary (alternative).** Build and install as a systemd service on an Ubuntu VPS:
 
@@ -307,7 +307,7 @@ curl -s http://127.0.0.1:7001/stats | jq
 curl -s http://127.0.0.1:7001/healthz
 ```
 
-(In the Docker stack the admin listener stays inside the container on `127.0.0.1:7001` and is not published. To query it remotely, pass `-admin 0.0.0.0:7001 -admin-token <token>` to `mygrok-server` and publish `7001` — the token is then required for all callers.)
+(In the Docker stack the server binds the host network, so the admin listener is simply the VPS loopback: `curl http://127.0.0.1:7001/stats` from the VPS shell. To query it remotely, use `-admin-token <token>` and send `X-Mygrok-Admin-Token: <token>`, or `ssh -L 7001:127.0.0.1:7001 your-vps` and curl locally.)
 
 `/stats` returns live operational state:
 

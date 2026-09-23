@@ -8,7 +8,14 @@ All notable changes to this project will be documented in this file.
 - `install.sh`: one-shot server installer — `curl -fsSL https://raw.githubusercontent.com/veloriba/mygrok/main/install.sh | bash -` on the VPS. Interactive (domain / image source / certificate / port-conflict questions) or fully non-interactive via flags/env (`--domain`, `--token`, `--image-tar`, `--registry`, `--cert-dir`, `--adopt-host-nginx`, `--dry-run`). Stages the stack into `/opt/mygrok`, reuses an existing Let's Encrypt dir or runs the interactive DNS-01 certbot flow, detects and (on confirmation) adopts conflicting host nginx / old binary-mode installs, verifies the front-end, and supports in-place upgrade and `--uninstall [--purge]`.
 
 ### Changed
+- Server docker stack now uses `network_mode: host` for the `mygrok-server` container (binds `:7000`, tunnel range, and loopback `127.0.0.1:8080` directly, like bare-binary mode). Publishing the full 100-port tcp+udp tunnel range through dockerd's userland proxies was slow and could crash dockerd on small hosts; the nginx sidecar stays bridge with `extra_hosts` `host.docker.internal:host-gateway`. Listener ports are configurable via `MYGROK_CONTROL_ADDR` / `MYGROK_HTTP_ADDR` / `MYGROK_PORT_BASE` / `MYGROK_PORT_COUNT` (compose files, examples, install.sh template, admin/stats docs updated).
 - README: documented how to get the server image (build on the VPS / registry / offline tarball) and added an "Upgrading / migrating the server" section (image update + `up -d` recreate, idempotent `make server-install`, binary↔Docker migration, client auto-reconnect behavior, cert renewal in both modes).
+
+### Fixed
+- `install.sh`: in-place upgrade no longer aborts on its own ports — the still-running stack's `docker-proxy` listeners on 80/443/7000 are now recognized as the installer's own stack (recreated by the upcoming `compose up`) instead of being reported as host-nginx conflicts.
+- `install.sh`: `confirm()` crashed with `$2: unbound variable` when called without a default answer (port-conflict prompt), aborting non-interactive upgrades; the default is now optional.
+- `install.sh`: `--dry-run` printed a garbled "image" line (leftover text from the next branch) when `--image-tar` was set; the three image-source branches are now mutually exclusive.
+- `install.sh`: `--uninstall --purge` no longer reports "purged" when the image removal fails (e.g. image still in use) — it warns and prints the manual `docker image rm` command instead.
 
 ## [0.3.0] - 2026-09-23
 

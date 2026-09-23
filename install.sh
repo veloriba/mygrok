@@ -85,7 +85,7 @@ ask() { # ask <prompt> <default> -> $REPLY_ANSWER
 confirm() { # confirm <question> <y|n> -> returns 0 for yes
     # In non-interactive mode never assume "yes": interactive steps (certbot
     # DNS-01, apt installs, stopping host services) must be explicit.
-    local q="$1" def="$2" ans=""
+    local q="$1" def="${2:-}" ans=""
     if can_ask; then
         read -r -p "$q [y/N]: " ans </dev/tty || ans=""
         case "${ans:-$def}" in [Yy]*) return 0 ;; *) return 1 ;; esac
@@ -134,13 +134,10 @@ name: mygrok-server
 services:
   mygrok-server:
     image: mygrok:${MYGROK_TAG:-TAG_PLACEHOLDER}
-    command: ["mygrok-server", "-domain", "${DOMAIN}", "-control", "0.0.0.0:7000", "-http", "0.0.0.0:8080", "-log-format", "json"]
+    network_mode: host
+    command: ["mygrok-server", "-domain", "${DOMAIN}", "-control", "${MYGROK_CONTROL_ADDR:-:7000}", "-http", "${MYGROK_HTTP_ADDR:-127.0.0.1:8080}", "-port-base", "${MYGROK_PORT_BASE:-20000}", "-port-count", "${MYGROK_PORT_COUNT:-100}", "-log-format", "json"]
     environment:
       MYGROK_TOKEN: ${MYGROK_TOKEN}
-    ports:
-      - "7000:7000/tcp"
-      - "20000-20099:20000-20099/tcp"
-      - "20000-20099:20000-20099/udp"
     restart: unless-stopped
 
   nginx:
@@ -151,6 +148,8 @@ services:
     ports:
       - "80:80"
       - "443:443"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
       - mygrok-server
     restart: unless-stopped
@@ -183,7 +182,8 @@ server {
     ssl_certificate_key /etc/nginx/certs/privkey.pem;
 
     location / {
-        proxy_pass http://mygrok-server:8080;
+        # server runs with network_mode: host, HTTP front on the host loopback
+        proxy_pass http://host.docker.internal:8080;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
@@ -210,8 +210,11 @@ do_uninstall() {
     if [ "$PURGE" -eq 1 ]; then
         log "removing $STAGE_DIR and the mygrok image"
         $SUDO rm -rf "$STAGE_DIR"
-        docker image rm "mygrok:$VERSION" >/dev/null 2>&1 || true
-        ok "purged"
+        if docker image rm "mygrok:$VERSION" >/dev/null 2>&1; then
+            ok "purged"
+        else
+            warn "purged files, but image mygrok:$VERSION is still in use — remove it later with: docker image rm mygrok:$VERSION"
+        fi
     else
         warn "files kept in $STAGE_DIR (re-run install.sh to start it again, or remove manually)"
     fi
@@ -324,9 +327,17 @@ port_owner() { $SUDO ss -tlnp 2>/dev/null | awk -v p=":$1$" '$4 ~ p {print $6, $
 
 handle_conflicts() {
     local p owner
+    # On an in-place upgrade our own stack (still running) holds these ports
+    # via docker-proxy; compose up below recreates it, so that is not a conflict.
+    local own_stack=0
+    [ -f "$STAGE_DIR/docker-compose.yml" ] && own_stack=1
     for p in 80 443 7000; do
         owner="$(port_owner "$p")"
         [ -n "$owner" ] || continue
+        if [ "$own_stack" -eq 1 ] && printf '%s' "$owner" | grep -q docker-proxy; then
+            ok "port $p is held by our own stack — it will be restarted by the upgrade"
+            continue
+        fi
         warn "port $p is already in use: $owner"
         case "$ADOPT_HOST_NGINX" in
             yes)
@@ -398,7 +409,14 @@ main() {
         log "dry run — what would be done:"
         echo "  stage dir   : $STAGE_DIR (compose + rendered nginx.conf + .env + certs/)"
         echo "  domain      : $DOMAIN"
-        echo "  image       : $([ -n "$IMAGE_TAR" ] && echo "tarball $IMAGE_TAR" || [ -n "$REPO_DIR" ] && echo "built from $REPO_DIR" || echo "pulled from $REGISTRY/$IMAGE_NAME:$VERSION")"
+        if [ -n "$IMAGE_TAR" ]; then
+            image_desc="tarball $IMAGE_TAR"
+        elif [ -n "$REPO_DIR" ]; then
+            image_desc="built from $REPO_DIR"
+        else
+            image_desc="pulled from $REGISTRY/$IMAGE_NAME:$VERSION"
+        fi
+        echo "  image       : $image_desc"
         echo "  certificate : $CERT_DIR"
         echo "  ports       : 7000/tcp (control), 80+443 (nginx front), 20000-20099 tcp+udp (tunnels)"
         echo "  then        : docker compose up -d + verification"
@@ -478,7 +496,7 @@ $(ok "mygrok server is up on this host")
   Tunnels   : https://<subdomain>.$DOMAIN  (clients dial $( [ -n "$host_ip" ] && echo "$host_ip" || echo '<this host>' ):7000)
   Client    : docker run --rm --network host -e MYGROK_TOKEN=... mygrok:$VERSION \\
                 mygrok http 3000 <name> --server $( [ -n "$host_ip" ] && echo "$host_ip" || echo '<this host>' ):7000 --no-tui
-  Firewall  : open 7000/tcp, 80, 443, 20000-20099 (tcp+udp); keep 8080 closed
+  Firewall  : open 7000/tcp, 80, 443, 20000-20099 (tcp+udp); 8080 stays loopback (MYGROK_HTTP_ADDR)
   Logs      : docker compose --env-file $STAGE_DIR/.env -f $STAGE_DIR/docker-compose.yml logs -f
   Upgrade   : re-run this script (token is preserved)
   Uninstall : $0 --uninstall   (add --purge to remove files + image)

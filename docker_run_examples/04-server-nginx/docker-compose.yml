@@ -19,14 +19,12 @@ services:
       dockerfile: deploy/docker/Dockerfile
       args:
         VERSION: ${MYGROK_TAG:-0.3.0}
-    command: ["mygrok-server", "-domain", "${DOMAIN}", "-control", "0.0.0.0:7000", "-http", "0.0.0.0:8080", "-log-format", "json"]
+    network_mode: host
+    command: ["mygrok-server", "-domain", "${DOMAIN}", "-control", "${MYGROK_CONTROL_ADDR:-:7000}", "-http", "${MYGROK_HTTP_ADDR:-127.0.0.1:8080}", "-port-base", "${MYGROK_PORT_BASE:-20000}", "-port-count", "${MYGROK_PORT_COUNT:-100}", "-log-format", "json"]
     environment:
       MYGROK_TOKEN: ${MYGROK_TOKEN}
-    ports:
-      - "7000:7000/tcp"
-      - "20000-20099:20000-20099/tcp"
-      - "20000-20099:20000-20099/udp"
-    # 8080 is intentionally NOT published: nginx is the only front.
+    # 8080 binds to loopback by default (MYGROK_HTTP_ADDR): nginx is the only
+    # public front. Admin/stats is on host loopback :7001.
     restart: unless-stopped
 
   nginx:
@@ -37,6 +35,8 @@ services:
     ports:
       - "80:80"
       - "443:443"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
       - mygrok-server
     restart: unless-stopped

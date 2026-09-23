@@ -15,13 +15,12 @@ name: mygrok-example-05
 services:
   mygrok-server:
     image: mygrok:${MYGROK_TAG:-0.3.0}
-    command: ["mygrok-server", "-domain", "${DOMAIN}", "-control", "0.0.0.0:7000", "-http", "0.0.0.0:8080", "-log-format", "json"]
+    network_mode: host
+    command: ["mygrok-server", "-domain", "${DOMAIN}", "-control", "${MYGROK_CONTROL_ADDR:-:7000}", "-http", "${MYGROK_HTTP_ADDR:-127.0.0.1:8080}", "-port-base", "${MYGROK_PORT_BASE:-20000}", "-port-count", "${MYGROK_PORT_COUNT:-100}", "-log-format", "json"]
     environment:
       MYGROK_TOKEN: ${MYGROK_TOKEN}
-    ports:
-      - "7000:7000/tcp"
-      - "20000-20099:20000-20099/tcp"
-      - "20000-20099:20000-20099/udp"
-    # 8080 is NOT published: without a TLS front, HTTP tunnels would be
-    # plain HTTP on the internet — publish it only on trusted networks.
+    # network_mode: host binds the control port and tunnel range directly on
+    # the host (same as bare-binary mode). 8080 stays loopback: without a TLS
+    # front, HTTP tunnels are off by default — point your own host nginx at
+    # 127.0.0.1:8080 if you need them (see deploy/nginx/...example).
     restart: unless-stopped

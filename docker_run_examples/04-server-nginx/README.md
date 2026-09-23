@@ -1,8 +1,9 @@
 # 04 — server: full stack (mygrok-server + nginx TLS front)
 
 Self-contained server deployment: the `mygrok-server` container (tunnel
-control on `:7000`, HTTP front on `:8080` — not published) behind an
-`nginx:alpine` TLS front that routes wildcard subdomains to it.
+control on `:7000`, HTTP front on `127.0.0.1:8080`; `network_mode: host`, so
+these bind directly on the VPS) behind an `nginx:alpine` TLS front that routes
+wildcard subdomains to it via `host.docker.internal`.
 
 ```bash
 cp .env.example .env        # fill DOMAIN / MYGROK_TOKEN
