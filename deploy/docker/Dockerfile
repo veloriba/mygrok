@@ -18,10 +18,10 @@ COPY . .
 ARG VERSION=0.0.0
 RUN CGO_ENABLED=0 GOOS=linux \
     go build -trimpath -ldflags "-s -w -X github.com/veloriba/mygrok/internal/version.Version=${VERSION}" \
-    -o /out/mygrok cmd/client/main.go
+    -o /out/mygrok ./cmd/client
 RUN CGO_ENABLED=0 GOOS=linux \
     go build -trimpath -ldflags "-s -w -X github.com/veloriba/mygrok/internal/version.Version=${VERSION}" \
-    -o /out/mygrok-server cmd/server/main.go
+    -o /out/mygrok-server ./cmd/server
 
 FROM scratch
 COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
