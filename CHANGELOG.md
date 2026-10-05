@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-10-05
+
 ### Added
 - `install.sh`: one-shot server installer — `curl -fsSL https://raw.githubusercontent.com/veloriba/mygrok/main/install.sh | bash -` on the VPS. Interactive (domain / image source / certificate / port-conflict questions) or fully non-interactive via flags/env (`--domain`, `--token`, `--image-tar`, `--registry`, `--cert-dir`, `--adopt-host-nginx`, `--dry-run`). Stages the stack into `/opt/mygrok`, reuses an existing Let's Encrypt dir or runs the interactive DNS-01 certbot flow, detects and (on confirmation) adopts conflicting host nginx / old binary-mode installs, verifies the front-end, and supports in-place upgrade and `--uninstall [--purge]`.
 - Client: run N tunnels in one process. New `mygrok up` subcommand starts every tunnel from a config file's `"tunnels"` list (`--config` / `-f`, default `config.json` next to the binary) or from positional `<protocol> <port> <subdomain>` triples (`mygrok up http 3000 api tcp 22 ssh`). Each spec entry supports `name`, `protocol` (http|https|tcp|udp; https implies insecure), `port`, `subdomain`, `public_port`, `insecure`, `set_headers`, and a per-tunnel `local_host` override; global flags (`--local-host`, `--insecure`, `--set-header`, `--public-port`, `--flush-interval`, `--upstream-timeout`) act as defaults. The legacy single-tunnel profile shape (top-level `port`/`subdomain`/`scheme`) still works in `up` and in the root command; a non-empty `"tunnels"` list takes precedence over the legacy fields. Duplicate subdomains are rejected client-side (the server closes the older tunnel on takeover).

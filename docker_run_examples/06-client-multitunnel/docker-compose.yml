@@ -26,7 +26,7 @@ name: mygrok-example-06
 
 services:
   mygrok:
-    image: mygrok:${MYGROK_TAG:-0.3.0}
+    image: mygrok:${MYGROK_TAG:-0.4.0}
     command: ["mygrok", "up", "--config", "/etc/mygrok/tunnels.json", "--no-tui", "--log-format", "json"]
     environment:
       MYGROK_SERVER: ${MYGROK_SERVER}

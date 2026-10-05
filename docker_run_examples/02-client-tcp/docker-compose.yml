@@ -14,7 +14,7 @@ services:
   # Forward local TCP :22 (on the Docker host) to public port 2222 on the
   # server (--public-port; 0 would auto-assign from the 20000-20099 range).
   ssh:
-    image: mygrok:${MYGROK_TAG:-0.3.0}
+    image: mygrok:${MYGROK_TAG:-0.4.0}
     command: ["mygrok", "tcp", "22", "ssh", "--server", "${MYGROK_SERVER}", "--public-port", "2222", "--no-tui", "--log-format", "json"]
     environment:
       MYGROK_TOKEN: ${MYGROK_TOKEN}

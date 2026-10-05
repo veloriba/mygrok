@@ -40,7 +40,7 @@ networking:
 docker run --rm --network host \
   -v "$PWD/tunnels.json:/etc/mygrok/tunnels.json:ro" \
   -e MYGROK_SERVER=your-vps.com:7000 -e MYGROK_TOKEN=your-secret-token \
-  mygrok:0.3.0 mygrok up --config /etc/mygrok/tunnels.json --no-tui --log-format json
+  mygrok:0.4.0 mygrok up --config /etc/mygrok/tunnels.json --no-tui --log-format json
 ```)
 
 **Expected:** after `tunnel established` lines for both `api` and `ssh` in

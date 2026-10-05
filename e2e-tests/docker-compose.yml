@@ -8,13 +8,13 @@ name: mygrok-e2e
 
 services:
   server:
-    image: mygrok:0.3.0
+    image: mygrok:0.4.0
     command: ["mygrok-server", "-domain", "test.local", "-control", "0.0.0.0:7000",
               "-http", "0.0.0.0:8080", "-token", "testtoken", "-admin", "off",
               "--log-format", "json"]
 
   client:
-    image: mygrok-client-test:0.3.0
+    image: mygrok-client-test:0.4.0
     depends_on: [server]
     environment:
       MYGROK_SERVER: server:7000

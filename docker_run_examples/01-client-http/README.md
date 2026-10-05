@@ -14,7 +14,7 @@ networking):
 
 ```bash
 docker run --rm --network host -e MYGROK_TOKEN=your-secret-token \
-  mygrok:0.3.0 mygrok http 3000 api --server your-vps.com:7000 --no-tui
+  mygrok:0.4.0 mygrok http 3000 api --server your-vps.com:7000 --no-tui
 ```
 
 **Expected:** after `tunnel established` in the logs, visiting

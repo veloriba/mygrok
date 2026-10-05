@@ -14,7 +14,7 @@ name: mygrok-example-05
 
 services:
   mygrok-server:
-    image: mygrok:${MYGROK_TAG:-0.3.0}
+    image: mygrok:${MYGROK_TAG:-0.4.0}
     network_mode: host
     command: ["mygrok-server", "-domain", "${DOMAIN}", "-control", "${MYGROK_CONTROL_ADDR:-:7000}", "-http", "${MYGROK_HTTP_ADDR:-127.0.0.1:8080}", "-port-base", "${MYGROK_PORT_BASE:-20000}", "-port-count", "${MYGROK_PORT_COUNT:-100}", "-log-format", "json"]
     environment:

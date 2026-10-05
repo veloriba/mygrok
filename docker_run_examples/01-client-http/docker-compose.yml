@@ -13,7 +13,7 @@ services:
   # Expose local HTTP on port 3000 as https://api.example.com
   # (your base domain).
   api:
-    image: mygrok:${MYGROK_TAG:-0.3.0}
+    image: mygrok:${MYGROK_TAG:-0.4.0}
     command: ["mygrok", "http", "3000", "api", "--server", "${MYGROK_SERVER}", "--no-tui", "--log-format", "json"]
     environment:
       MYGROK_TOKEN: ${MYGROK_TOKEN}

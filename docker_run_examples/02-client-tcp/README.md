@@ -15,7 +15,7 @@ Equivalent one-off `docker run` (host networking):
 
 ```bash
 docker run --rm --network host -e MYGROK_TOKEN=your-secret-token \
-  mygrok:0.3.0 mygrok tcp 22 ssh --server your-vps.com:7000 --public-port 2222 --no-tui
+  mygrok:0.4.0 mygrok tcp 22 ssh --server your-vps.com:7000 --public-port 2222 --no-tui
 ```
 
 **Docker Desktop/WSL variant** (bridge network — the container cannot see
@@ -23,7 +23,7 @@ host ports, so point `--local-host` at the host):
 
 ```bash
 docker run --rm -e MYGROK_TOKEN=your-secret-token \
-  mygrok:0.3.0 mygrok tcp 22 ssh --server your-vps.com:7000 \
+  mygrok:0.4.0 mygrok tcp 22 ssh --server your-vps.com:7000 \
   --public-port 2222 --local-host host.docker.internal --no-tui
 ```
 

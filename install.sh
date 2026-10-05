@@ -9,7 +9,7 @@
 # port conflicts). Non-interactive: override via flags or environment:
 #
 #   DOMAIN=example.com MYGROK_TOKEN=... \
-#     curl -fsSL .../install.sh | bash - --non-interactive --image-tar /path/mygrok-0.3.0-amd64.tar.gz
+#     curl -fsSL .../install.sh | bash - --non-interactive --image-tar /path/mygrok-0.4.0-amd64.tar.gz
 #
 # Flags:
 #   --domain <base>        base domain for tunnels (required; env DOMAIN)
@@ -33,7 +33,7 @@
 # shellcheck disable=SC2034
 set -euo pipefail
 
-VERSION="0.3.0"   # kept in sync with the VERSION file / release tag
+VERSION="0.4.0"   # kept in sync with the VERSION file / release tag
 REGISTRY="ghcr.io/veloriba"
 IMAGE_NAME="mygrok"
 

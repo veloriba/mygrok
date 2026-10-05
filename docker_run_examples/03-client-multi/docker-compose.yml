@@ -30,7 +30,7 @@ services:
   # Mode 1: host network — exposes a port on the Docker host (here :8080)
   # as https://web.example.com.
   web:
-    image: mygrok:${MYGROK_TAG:-0.3.0}
+    image: mygrok:${MYGROK_TAG:-0.4.0}
     command: ["mygrok", "http", "8080", "web", "--server", "${MYGROK_SERVER}", "--no-tui", "--log-format", "json"]
     environment:
       MYGROK_TOKEN: ${MYGROK_TOKEN}
@@ -41,7 +41,7 @@ services:
   # https://app-web.example.com. The tunnel container dials app:80 directly
   # (container-to-container, no host port needed).
   app-web:
-    image: mygrok:${MYGROK_TAG:-0.3.0}
+    image: mygrok:${MYGROK_TAG:-0.4.0}
     command: ["mygrok", "http", "80", "app-web", "--server", "${MYGROK_SERVER}", "--local-host", "app", "--no-tui", "--log-format", "json"]
     environment:
       MYGROK_TOKEN: ${MYGROK_TOKEN}

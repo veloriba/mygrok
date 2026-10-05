@@ -48,7 +48,7 @@ curl -fsSL https://raw.githubusercontent.com/veloriba/mygrok/main/install.sh | b
 ```bash
 DOMAIN=example.com MYGROK_TOKEN=... \
   curl -fsSL https://raw.githubusercontent.com/veloriba/mygrok/main/install.sh | bash - \
-  --non-interactive --image-tar /path/mygrok-0.3.0-amd64.tar.gz --cert-dir /path/certs
+  --non-interactive --image-tar /path/mygrok-0.4.0-amd64.tar.gz --cert-dir /path/certs
 ```
 
 **Docker Compose (manual).** The server stack is `mygrok-server` + an nginx TLS front in one compose file:
@@ -239,7 +239,7 @@ Publish an OpenAI-compatible gateway (e.g. [LiteLLM](https://github.com/BerriAI/
 
 ```bash
 # On the gateway host (OpenAI-compatible server on :4000)
-docker run --rm --network host -e MYGROK_TOKEN=... mygrok:0.3.0 \
+docker run --rm --network host -e MYGROK_TOKEN=... mygrok:0.4.0 \
   mygrok http 4000 llm --server yourdomain.com:7000 --no-tui
 ```
 
@@ -257,7 +257,7 @@ curl https://llm.yourdomain.com/v1/chat/completions \
 
 ```bash
 # tunnel local sshd :22 to public port 2222
-docker run --rm --network host -e MYGROK_TOKEN=... mygrok:0.3.0 \
+docker run --rm --network host -e MYGROK_TOKEN=... mygrok:0.4.0 \
   mygrok tcp 22 ssh --server yourdomain.com:7000 --public-port 2222 --no-tui
 
 # from anywhere:
@@ -269,7 +269,7 @@ The same works for RDP, VNC, game servers, or any raw TCP service; UDP tunnels u
 ### Dev preview: WebSockets & HMR
 
 ```bash
-docker run --rm --network host -e MYGROK_TOKEN=... mygrok:0.3.0 \
+docker run --rm --network host -e MYGROK_TOKEN=... mygrok:0.4.0 \
   mygrok http 3000 preview --server yourdomain.com:7000 --no-tui
 ```
 
@@ -286,7 +286,7 @@ Two styles, pick per host:
   docker run -d --name mygrok --network host \
     -v "$PWD/tunnels.json:/etc/mygrok/tunnels.json:ro" \
     -e MYGROK_SERVER=yourdomain.com:7000 -e MYGROK_TOKEN=your-secret-token \
-    mygrok:0.3.0 mygrok up --config /etc/mygrok/tunnels.json --no-tui --log-format json
+    mygrok:0.4.0 mygrok up --config /etc/mygrok/tunnels.json --no-tui --log-format json
 
   # later: edit tunnels.json, then
   docker kill --signal=HUP mygrok
@@ -384,7 +384,7 @@ curl -s http://127.0.0.1:7001/healthz
 ```json
 {
   "now": "2026-09-06T11:00:00Z",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "uptime": "6h23m10s",
   "tunnels": 2,
   "inflight_requests": 0,
