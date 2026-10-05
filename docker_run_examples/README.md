@@ -13,10 +13,11 @@ short `README.md`. Only placeholders are used — replace `example.com`,
 | [03-client-multi](03-client-multi/) | Several tunnels on one host (host network + shared container network) | `docker compose up -d` → tunnels `web` + `app-web` |
 | [04-server-nginx](04-server-nginx/) | Full server stack: `mygrok-server` + nginx TLS front (builds the image itself) | `docker compose up -d` (wildcard certs in `certs/` required) |
 | [05-server-minimal](05-server-minimal/) | Bare `mygrok-server`, no TLS front (tcp/udp tunnels or private networks) | `docker compose up -d` |
+| [06-client-multitunnel](06-client-multitunnel/) | One container runs all tunnels from `tunnels.json` (multi-tunnel mode) | `docker compose up -d` → tunnels `api` + `ssh` |
 
 ## Build the image once
 
-Examples 01–03 and 05 expect the image to exist locally. Build it once from
+Examples 01–03, 05, and 06 expect the image to exist locally. Build it once from
 the repo root:
 
 ```bash
@@ -36,7 +37,7 @@ docker load -i dist/mygrok-<version>-<arch>.tar
 
 ## Docker Desktop / WSL note
 
-`network_mode: host` (used by 01, 02, 03) needs Docker Desktop ≥ 4.29 on
+`network_mode: host` (used by 01, 02, 03, and 06) needs Docker Desktop ≥ 4.29 on
 Windows/macOS. On older versions (or WSL) use the default bridge network and
 add `--local-host host.docker.internal` to each tunnel's command so it reaches
 services running on the host.

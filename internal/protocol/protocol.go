@@ -52,8 +52,8 @@ const (
 
 type HandshakeRequest struct {
 	Token     string `json:"token"`
-	Subdomain string `json:"subdomain"` // Requested subdomain, empty for random
-	Protocol  string `json:"protocol"`  // "http", "tcp", or "udp"
+	Subdomain string `json:"subdomain"`      // Requested subdomain, empty for random
+	Protocol  string `json:"protocol"`       // "http", "tcp", or "udp"
 	Port      int    `json:"port,omitempty"` // Requested public port (tcp/udp); 0 = auto-assign
 }
 

@@ -1,0 +1,6 @@
+{
+  "tunnels": [
+    { "name": "api",  "protocol": "http", "port": 8099, "subdomain": "api" },
+    { "name": "web2", "protocol": "http", "port": 8099, "subdomain": "web2" }
+  ]
+}

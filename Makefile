@@ -19,7 +19,7 @@ LDFLAGS=-ldflags "-X github.com/veloriba/mygrok/internal/version.Version=$(VERSI
 build: build-server build-client build-task
 
 build-task:
-	go build $(LDFLAGS) -o bin/mgrok-task cmd/task/main.go
+	go build $(LDFLAGS) -o bin/mygrok-task cmd/task/main.go
 
 test:
 	go test -v ./...
@@ -129,10 +129,10 @@ docker-server-status:
 docker-server-logs:
 	docker compose $(DOCKER_SERVER_ENV) -f $(DOCKER_SERVER_COMPOSE) logs -f --tail 100 $(SERVICE)
 
-# Build the `mgrok-task` CLI (scaffold/manage per-project docker compose tunnels).
-# Install to your PATH: cp bin/mgrok-task /usr/local/bin/
+# Build the `mygrok-task` CLI (scaffold/manage per-project docker compose tunnels).
+# Install to your PATH: cp bin/mygrok-task /usr/local/bin/
 task:
-	go build $(LDFLAGS) -o bin/mgrok-task cmd/task/main.go
+	go build $(LDFLAGS) -o bin/mygrok-task cmd/task/main.go
 
 
 # --- Windows host client deployment targets ---

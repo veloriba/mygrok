@@ -138,7 +138,7 @@ cp .env.example .env                  # set MYGROK_SERVER, MYGROK_TOKEN
 make docker-up                        # or: docker compose -f deploy/docker/docker-compose.client.yml up -d
 ```
 
-Add more tunnels by adding services to `docker-compose.client.yml` (one service per tunnel — see the commented `ssh` example). On air-gapped hosts, build once and transfer: `make docker-save` → `docker load -i mygrok-<version>-<arch>.tar`.
+Add more tunnels by adding services to `docker-compose.client.yml` (one service per tunnel — see the commented `ssh` example), or run all tunnels of a project in a single container from a `tunnels.json` config file (see the commented `mygrok-multi` service in the same file, and [`docker_run_examples/06-client-multitunnel`](docker_run_examples/06-client-multitunnel/)). On air-gapped hosts, build once and transfer: `make docker-save` → `docker load -i mygrok-<version>-<arch>.tar`.
 
 **Bare binary (alternative).**
 
@@ -155,15 +155,43 @@ The client TUI shows the public URL as soon as the tunnel is up.
 For "one tunnel per project" setups, the `task` binary scaffolds and manages a self-contained `mygrok/` folder inside any project directory:
 
 ```bash
-make task                                        # build bin/mgrok-task (install: cp bin/mgrok-task /usr/local/bin/mgrok-task)
-mgrok-task config set                            # one-time: store MYGROK_SERVER / MYGROK_TOKEN in ~/.config/mygrok/env
-mgrok-task add ~/dev/myapp --port 3000 --sub my-app
-mgrok-task add ~/dev/mygame --port 8123 --sub mygame --network proxy --local-host mygame
-mgrok-task add ~/dev/mybox --proto tcp --port 22 --sub ssh --public-port 2222
-mgrok-task up|down|status|logs ~/dev/myapp
+make task                                        # build bin/mygrok-task (install: cp bin/mygrok-task /usr/local/bin/mygrok-task)
+mygrok-task config set                            # one-time: store MYGROK_SERVER / MYGROK_TOKEN in ~/.config/mygrok/env
+mygrok-task add ~/dev/myapp --port 3000 --sub my-app
+mygrok-task add ~/dev/mygame --port 8123 --sub mygame --network proxy --local-host mygame
+mygrok-task add ~/dev/mybox --proto tcp --port 22 --sub ssh --public-port 2222
+mygrok-task add --multi ~/dev/mybox --port 3000 --sub api
+mygrok-task add --multi ~/dev/mybox --proto tcp --port 22 --sub ssh --public-port 2222
+mygrok-task up|down|status|logs ~/dev/myapp
 ```
 
 `add` generates `<dir>/mygrok/docker-compose.yml` (project `mygrok-<sub>`, container `mygrok_<sub>`, `restart: unless-stopped`) and `<dir>/mygrok/.env` (server + token, mode `0600`). `--network <name>` joins an existing docker network instead of `network_mode: host` (use `--local-host <container>` to target a service on that network); `--proto https` adds `--insecure` for self-signed local upstreams.
+
+`add --multi <dir>` scaffolds a **single container that runs all tunnels** of the project from `<dir>/mygrok/tunnels.json` (project `mygrok-<dir-basename>`, container `mygrok_<dir-basename>`); every later `add --multi` appends another tunnel spec to that file (duplicate subdomains are refused), so one directory can expose many tunnels with one container. Single-mode and multi-mode directories can't be mixed — `mygrok-task` detects both conflicts.
+
+### Multi-tunnel: one process, many tunnels
+
+The client can run **every tunnel of a project in one process**: point `mygrok up` at a config file, or pass `<protocol> <port> <subdomain>` triples:
+
+```bash
+mygrok up -f tunnels.json
+mygrok up http 3000 api tcp 22 ssh
+```
+
+Minimal `tunnels.json` (each entry supports `name`, `protocol` `http|https|tcp|udp`, `port`, `subdomain`, optional `public_port`, `insecure`, `set_headers`, and a per-tunnel `local_host`; `server`/`token` may stay empty — the `MYGROK_SERVER`/`MYGROK_TOKEN` environment supplies them, so the file is safe to commit):
+
+```json
+{
+  "server": "",
+  "token": "",
+  "tunnels": [
+    { "name": "api", "protocol": "http", "port": 3000, "subdomain": "api" },
+    { "name": "ssh", "protocol": "tcp", "port": 22, "subdomain": "ssh", "public_port": 2222 }
+  ]
+}
+```
+
+N tunnels = N server-side registrations, but all in one process — one container (see [`docker_run_examples/06-client-multitunnel`](docker_run_examples/06-client-multitunnel/)) or one systemd unit (see the commented alternative in `systemd/mygrok-client.service`). `mygrok-task add --multi <dir> --port N --sub name` scaffolds the Docker variant for you.
 
 ### Runnable examples
 
@@ -176,6 +204,7 @@ mgrok-task up|down|status|logs ~/dev/myapp
 | `03-client-multi` | several tunnels on one host (host network + shared docker network) |
 | `04-server-nginx` | full server stack: `mygrok-server` + nginx TLS front |
 | `05-server-minimal` | server without a TLS front (tcp/udp tunnels, private networks) |
+| `06-client-multitunnel` | one container runs all tunnels from `tunnels.json` (multi-tunnel mode) |
 
 ## 🧠 Use Cases
 
@@ -241,7 +270,7 @@ Run one tunnel container per service (see `docker_run_examples/03-client-multi`)
 - `make docker-save`: export an image tarball for offline transfer.
 - `make docker-up` / `docker-down` / `docker-status` / `docker-logs SERVICE=<name>`: manage client tunnels from `deploy/docker/docker-compose.client.yml`.
 - `make docker-server-up` / `docker-server-down` / `docker-server-status` / `docker-server-logs SERVICE=<name>`: manage the server stack from `deploy/docker/docker-compose.server.yml`.
-- `make task`: build the `mgrok-task` CLI for per-project tunnel scaffolding.
+- `make task`: build the `mygrok-task` CLI for per-project tunnel scaffolding.
 
 ## 🛠 Configuration
 

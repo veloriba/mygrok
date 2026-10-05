@@ -9,6 +9,8 @@
 #   docker logs -f <service>   -> live logs
 #   docker compose restart <service>
 # Crashed tunnels come back automatically (restart: unless-stopped).
+# (Alternative: one container running all tunnels from a tunnels.json file —
+# see the commented `mygrok-multi` service at the bottom of this file.)
 #
 # The image is built on first `up` (or `make docker-build` in the repo root).
 # To reuse a prebuilt image instead, delete the `build:` block and tag it:
@@ -43,3 +45,32 @@ services:
   #     MYGROK_TOKEN: ${MYGROK_TOKEN}
   #   network_mode: host
   #   restart: unless-stopped
+  #
+  # --- Multi-tunnel alternative: ONE container running ALL tunnels ---------
+  # The style above (one service per tunnel) makes each tunnel easy to see
+  # and restart individually. Instead, a single `mygrok` process can run
+  # every tunnel listed in a tunnels.json file (N tunnels = N server-side
+  # registrations in one container):
+  #
+  #   mygrok-multi:
+  #     image: mygrok:${MYGROK_TAG:-0.3.0}
+  #     command: ["mygrok", "up", "--config", "/etc/mygrok/tunnels.json", "--no-tui", "--log-format", "json"]
+  #     environment:
+  #       MYGROK_SERVER: ${MYGROK_SERVER}
+  #       MYGROK_TOKEN: ${MYGROK_TOKEN}
+  #     volumes:
+  #       - ./tunnels.json:/etc/mygrok/tunnels.json:ro
+  #     network_mode: host
+  #     restart: unless-stopped
+  #
+  # tunnels.json example -- server/token stay empty, the container's
+  # MYGROK_SERVER/MYGROK_TOKEN environment (this .env) supplies them, so the
+  # file never contains secrets:
+  #
+  #   {
+  #     "server": "", "token": "",
+  #     "tunnels": [
+  #       { "name": "api", "protocol": "http", "port": 3000, "subdomain": "api" },
+  #       { "name": "ssh", "protocol": "tcp", "port": 22, "subdomain": "ssh", "public_port": 2222 }
+  #     ]
+  #   }

@@ -38,7 +38,7 @@ func TestTunnelIntegration(t *testing.T) {
 		Subdomain:  "test-sub",
 		LocalAddr:  localSrv.URL,
 	})
-	go cl.Start()
+	go cl.Start(make(chan struct{}))
 	time.Sleep(200 * time.Millisecond)
 
 	req, _ := http.NewRequest("GET", "http://"+srv.HTTPListenAddr(), nil)
@@ -93,7 +93,7 @@ func TestMultipleTunnels(t *testing.T) {
 			Subdomain:  sub,
 			LocalAddr:  localSrv.URL + "?sub=" + sub,
 		})
-		go cl.Start()
+		go cl.Start(make(chan struct{}))
 	}
 	time.Sleep(300 * time.Millisecond)
 
@@ -164,7 +164,7 @@ func TestTunnelTCP(t *testing.T) {
 		Protocol:   protocol.ProtocolTCP,
 		NoTUI:      true,
 	})
-	go cl.Start()
+	go cl.Start(make(chan struct{}))
 
 	var port int
 	for i := 0; i < 100; i++ {
@@ -239,7 +239,7 @@ func TestTunnelUDP(t *testing.T) {
 		Protocol:   protocol.ProtocolUDP,
 		NoTUI:      true,
 	})
-	go cl.Start()
+	go cl.Start(make(chan struct{}))
 
 	var port int
 	for i := 0; i < 100; i++ {
@@ -296,7 +296,7 @@ func TestAdminStats(t *testing.T) {
 		LocalAddr:  localSrv.URL,
 		NoTUI:      true,
 	})
-	go cl.Start()
+	go cl.Start(make(chan struct{}))
 	time.Sleep(200 * time.Millisecond)
 
 	for i := 0; i < 5; i++ {
@@ -378,7 +378,7 @@ func TestHTTPStreamReclaimed(t *testing.T) {
 		LocalAddr:  local.URL,
 		NoTUI:      true,
 	})
-	go cl.Start()
+	go cl.Start(make(chan struct{}))
 	time.Sleep(200 * time.Millisecond)
 
 	const n = 200
@@ -487,7 +487,7 @@ func TestHTTPRequestToTCPTunnel(t *testing.T) {
 		Protocol:   protocol.ProtocolTCP,
 		NoTUI:      true,
 	})
-	go cl.Start()
+	go cl.Start(make(chan struct{}))
 	time.Sleep(300 * time.Millisecond)
 
 	req, _ := http.NewRequest("GET", "http://"+srv.HTTPListenAddr()+"/v1/models", nil)

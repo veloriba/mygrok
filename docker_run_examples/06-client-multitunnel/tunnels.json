@@ -1,0 +1,19 @@
+{
+  "server": "",
+  "token": "",
+  "tunnels": [
+    {
+      "name": "api",
+      "protocol": "http",
+      "port": 3000,
+      "subdomain": "api"
+    },
+    {
+      "name": "ssh",
+      "protocol": "tcp",
+      "port": 22,
+      "subdomain": "ssh",
+      "public_port": 2222
+    }
+  ]
+}

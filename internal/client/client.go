@@ -15,18 +15,14 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"os"
-	"os/signal"
 	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
-	"syscall"
 	"time"
 
-	"github.com/fatih/color"
 	"github.com/hashicorp/yamux"
 	"github.com/veloriba/mygrok/internal/protocol"
-	"github.com/veloriba/mygrok/internal/version"
 )
 
 type RequestInfo struct {
@@ -46,6 +42,8 @@ type Config struct {
 	Protocol      string // protocol.ProtocolHTTP (default), ProtocolTCP, ProtocolUDP
 	RequestedPort int    // tcp/udp: requested public port, 0 = auto-assign
 	NoTUI         bool
+	Name          string       // display name for logs and UI; falls back to subdomain, then localAddr
+	Logger        *slog.Logger // per-tunnel logger; defaults to slog.Default()
 	// HTTP-only options:
 	FlushInterval   time.Duration // -1 = flush after every write
 	Insecure        bool          // skip TLS verification for the local target
@@ -61,6 +59,8 @@ type TunnelClient struct {
 	Protocol      string
 	RequestedPort int
 	NoTUI         bool
+	Name          string
+	log           *slog.Logger
 
 	FlushInterval   time.Duration
 	Insecure        bool
@@ -87,6 +87,17 @@ func NewTunnelClient(cfg Config) *TunnelClient {
 	if cfg.Protocol == protocol.ProtocolHTTP && !strings.HasPrefix(localAddr, "http") {
 		localAddr = "http://" + localAddr
 	}
+	name := cfg.Name
+	if name == "" {
+		name = cfg.Subdomain
+	}
+	if name == "" {
+		name = localAddr
+	}
+	logger := cfg.Logger
+	if logger == nil {
+		logger = slog.Default()
+	}
 	return &TunnelClient{
 		ServerAddr:      cfg.ServerAddr,
 		Token:           cfg.Token,
@@ -95,6 +106,8 @@ func NewTunnelClient(cfg Config) *TunnelClient {
 		Protocol:        cfg.Protocol,
 		RequestedPort:   cfg.RequestedPort,
 		NoTUI:           cfg.NoTUI,
+		Name:            name,
+		log:             logger,
 		FlushInterval:   cfg.FlushInterval,
 		Insecure:        cfg.Insecure,
 		SetHeaders:      cfg.SetHeaders,
@@ -111,9 +124,56 @@ func (c *TunnelClient) PublicPort() int {
 	return c.publicPort
 }
 
+// ClientSnapshot is an immutable point-in-time view of a tunnel's state,
+// consumed by the shared TUI dashboard.
+type ClientSnapshot struct {
+	Name          string
+	Protocol      string
+	Status        string // "connecting" | "online" | "error"
+	PublicURL     string
+	PublicPort    int
+	ErrorMsg      string
+	LocalAddr     string
+	StartTime     time.Time
+	TotalRequests uint64
+	BytesSent     uint64
+	BytesReceived uint64
+	Requests      []RequestInfo
+}
+
+// Snapshot returns the tunnel's current state under the client lock.
+func (c *TunnelClient) Snapshot() ClientSnapshot {
+	c.mu.Lock()
+	snap := ClientSnapshot{
+		Name:          c.Name,
+		Protocol:      c.Protocol,
+		PublicURL:     c.publicURL,
+		PublicPort:    c.publicPort,
+		ErrorMsg:      c.errorMsg,
+		LocalAddr:     c.LocalAddr,
+		StartTime:     c.startTime,
+		TotalRequests: atomic.LoadUint64(&c.totalRequests),
+		BytesSent:     atomic.LoadUint64(&c.bytesSent),
+		BytesReceived: atomic.LoadUint64(&c.bytesReceived),
+		Requests:      make([]RequestInfo, len(c.requests)),
+	}
+	copy(snap.Requests, c.requests)
+	c.mu.Unlock()
+
+	switch {
+	case snap.PublicURL != "":
+		snap.Status = "online"
+	case snap.ErrorMsg != "":
+		snap.Status = "error"
+	default:
+		snap.Status = "connecting"
+	}
+	return snap
+}
+
 // logger returns the structured logger for the client.
 func (c *TunnelClient) logger() *slog.Logger {
-	return slog.Default()
+	return c.log
 }
 
 // logf emits a structured lifecycle event. It is only active in --no-tui mode
@@ -151,25 +211,15 @@ func (c *TunnelClient) reconnectInterval() time.Duration {
 	return 5 * time.Second
 }
 
-func (c *TunnelClient) Start() error {
-	done := make(chan struct{})
-	signalChan := make(chan os.Signal, 1)
-	signal.Notify(signalChan, os.Interrupt, syscall.SIGTERM)
-
-	go func() {
-		<-signalChan
-		close(done)
-	}()
-	if !c.NoTUI {
-		go c.uiLoop(done)
-	}
-
+// Start runs the reconnect loop until done is closed. Signal handling and the
+// TUI dashboard live in the TunnelManager (or cmd), which owns the done channel.
+func (c *TunnelClient) Start(done <-chan struct{}) {
 	base := c.reconnectInterval()
 	var attempt int
 	for {
 		select {
 		case <-done:
-			return nil
+			return
 		default:
 		}
 		started := time.Now()
@@ -191,7 +241,7 @@ func (c *TunnelClient) Start() error {
 			c.logf(slog.LevelWarn, "disconnected", "err", err.Error(), "attempt", attempt, "reconnect_in", wait.String())
 			select {
 			case <-done:
-				return nil
+				return
 			case <-time.After(wait):
 			}
 			continue
@@ -349,6 +399,10 @@ func (c *TunnelClient) serveHTTP(session *yamux.Session, done <-chan struct{}) e
 	go func() {
 		<-done
 		server.Close()
+		// Close the yamux session too: http.Serve's own listener is the
+		// session, so without this the serve loop (and thus Start) would
+		// never observe done.
+		session.Close()
 	}()
 
 	// Serve the HTTP requests over the yamux session
@@ -450,101 +504,6 @@ func (c *TunnelClient) addRequest(info RequestInfo) {
 		c.requests = c.requests[1:]
 	}
 	atomic.AddUint64(&c.totalRequests, 1)
-}
-
-func (c *TunnelClient) uiLoop(done <-chan struct{}) {
-	blue := color.New(color.FgBlue).SprintFunc()
-	green := color.New(color.FgGreen).SprintFunc()
-	yellow := color.New(color.FgYellow).SprintFunc()
-	cyan := color.New(color.FgCyan).SprintFunc()
-	white := color.New(color.FgWhite, color.Bold).SprintFunc()
-
-	for {
-		c.mu.Lock()
-		urlStr := c.publicURL
-		errMsg := c.errorMsg
-		requests := make([]RequestInfo, len(c.requests))
-		copy(requests, c.requests)
-		c.mu.Unlock()
-
-		fmt.Print("\033[H\033[2J")
-		fmt.Printf("%s\n\n", white("mygrok"))
-
-		status := yellow("connecting...")
-		if urlStr != "" {
-			status = green("online")
-		} else if errMsg != "" {
-			status = color.New(color.FgRed).Sprint("error")
-		}
-
-		fmt.Printf("%-20s %s\n", "Session Status", status)
-		if errMsg != "" {
-			fmt.Printf("%-20s %s\n", "Error", color.New(color.FgRed).Sprint(errMsg))
-		}
-		fmt.Printf("%-20s %s\n", "Version", version.Version)
-		fmt.Printf("%-20s %s\n", "Region", "Europe")
-
-		// Show both HTTP and HTTPS if possible, or just the one we have
-		if urlStr != "" {
-			fmt.Printf("%-20s %s -> %s\n", "Forwarding", blue(urlStr), cyan(c.LocalAddr))
-			// If it's http, also show how it would look with https (assuming Nginx is set up)
-			if strings.HasPrefix(urlStr, "http://") {
-				httpsURL := "https://" + urlStr[7:]
-				fmt.Printf("%-20s %s -> %s\n", "", blue(httpsURL), cyan(c.LocalAddr))
-			}
-		}
-
-		// Statistics block
-		totalReqs := atomic.LoadUint64(&c.totalRequests)
-		sent := atomic.LoadUint64(&c.bytesSent)
-		received := atomic.LoadUint64(&c.bytesReceived)
-		uptime := time.Since(c.startTime).Truncate(time.Second)
-
-		fmt.Printf("\n%-20s %d\n", "Total Requests", totalReqs)
-		fmt.Printf("%-20s %s\n", "KB Transmitted", formatKB(sent))
-		fmt.Printf("%-20s %s\n", "KB Received", formatKB(received))
-		fmt.Printf("%-20s %s\n", "Uptime", uptime.String())
-
-		fmt.Printf("\n%s\n", white("HTTP Requests"))
-		fmt.Printf("%-20s %-10s %-10s %s\n", "TIME", "METHOD", "STATUS", "PATH")
-		fmt.Println(strings.Repeat("-", 100))
-
-		for i := len(requests) - 1; i >= 0; i-- {
-			req := requests[i]
-			statusStr := fmt.Sprintf("%d", req.Status)
-			rawStatus := statusStr
-			if req.Status >= 200 && req.Status < 300 {
-				statusStr = green(statusStr)
-			} else if req.Status >= 400 {
-				statusStr = color.New(color.FgRed).Sprint(statusStr)
-			}
-
-			// Handle padding manually because ANSI codes mess up fmt.Printf width
-			count := 10 - len(rawStatus)
-			if count < 0 {
-				count = 0
-			}
-			padding := strings.Repeat(" ", count)
-
-			fmt.Printf("%-20s %-10s %s%s %s\n",
-				req.Timestamp.Format("15:04:05.000"),
-				req.Method,
-				statusStr,
-				padding,
-				req.Path,
-			)
-		}
-
-		select {
-		case <-done:
-			return
-		case <-time.After(5 * time.Second):
-		}
-	}
-}
-
-func formatKB(b uint64) string {
-	return fmt.Sprintf("%.2f KB", float64(b)/1024.0)
 }
 
 // bufferedConn is an io.ReadWriteCloser that reads from a shared *bufio.Reader

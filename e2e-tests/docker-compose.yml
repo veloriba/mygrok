@@ -1,0 +1,28 @@
+# mygrok E2E test stack (local only, placeholders only — safe, no secrets).
+# Run from the repo root:
+#   docker compose -f e2e-tests/docker-compose.yml up -d                        # start all 3
+#   docker compose -f e2e-tests/docker-compose.yml logs client                   # tunnel logs
+#   docker exec mygrok-e2e-user-1 sh -c "curl -s -H 'Host: api.test.local' http://server:8080/"
+#   docker compose -f e2e-tests/docker-compose.yml down                          # tear down
+name: mygrok-e2e
+
+services:
+  server:
+    image: mygrok:0.3.0
+    command: ["mygrok-server", "-domain", "test.local", "-control", "0.0.0.0:7000",
+              "-http", "0.0.0.0:8080", "-token", "testtoken", "-admin", "off",
+              "--log-format", "json"]
+
+  client:
+    image: mygrok-client-test:0.3.0
+    depends_on: [server]
+    environment:
+      MYGROK_SERVER: server:7000
+      MYGROK_TOKEN: testtoken
+    volumes:
+      - ./tunnels.json:/etc/mygrok/tunnels.json:ro
+
+  user:
+    image: curlimages/curl:latest
+    depends_on: [client]
+    command: ["sleep", "infinity"]

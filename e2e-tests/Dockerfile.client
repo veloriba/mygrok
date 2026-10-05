@@ -1,0 +1,15 @@
+# Test client: mygrok (built from the repo) + python upstream on 127.0.0.1:8099
+# Rebuild after client changes (from the repo root):
+#   docker build -f e2e-tests/Dockerfile.client -t mygrok-client-test:0.3.0 .
+FROM golang:1.25-alpine AS build
+WORKDIR /src
+COPY go.mod go.sum ./
+COPY cmd ./cmd
+COPY internal ./internal
+RUN CGO_ENABLED=0 go build -o /out/mygrok ./cmd/client
+
+FROM python:3.12-alpine
+COPY --from=build /out/mygrok /usr/local/bin/mygrok
+RUN mkdir -p /srv && printf 'UPSTREAM-OK\n' > /srv/index.html
+WORKDIR /srv
+ENTRYPOINT ["sh", "-c", "python3 -m http.server 8099 --bind 127.0.0.1 & exec mygrok up --config /etc/mygrok/tunnels.json --no-tui --log-format json"]

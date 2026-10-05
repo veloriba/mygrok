@@ -1,0 +1,36 @@
+# One container runs ALL tunnels from tunnels.json (client multi-tunnel
+# mode: `mygrok up --config /etc/mygrok/tunnels.json`).
+#
+# vs. 01/02/03 (one service per tunnel): one process and one container for
+# every tunnel; N tunnels = N server-side registrations in this one
+# container. `docker compose logs -f` shows all tunnels interleaved (each
+# log line carries tunnel=<name>).
+#
+# Setup:
+#   cp .env.example .env   # fill MYGROK_SERVER / MYGROK_TOKEN
+#   docker compose up -d
+#
+# The server address and token come from the environment (.env) -- the
+# mounted tunnels.json keeps its server/token fields empty on purpose, so
+# the file stays safe to commit.
+#
+# To add or remove tunnels: edit tunnels.json, then
+#   docker compose restart
+# (the file is read at container start; a plain `up -d` will not restart it).
+#
+# The mygrok image must exist locally: build it once from the repo root
+# (see ../README.md) or `docker load` a tarball from `make docker-save`.
+
+name: mygrok-example-06
+
+services:
+  mygrok:
+    image: mygrok:${MYGROK_TAG:-0.3.0}
+    command: ["mygrok", "up", "--config", "/etc/mygrok/tunnels.json", "--no-tui", "--log-format", "json"]
+    environment:
+      MYGROK_SERVER: ${MYGROK_SERVER}
+      MYGROK_TOKEN: ${MYGROK_TOKEN}
+    volumes:
+      - ./tunnels.json:/etc/mygrok/tunnels.json:ro
+    network_mode: host
+    restart: unless-stopped
