@@ -24,3 +24,17 @@ docker compose -f e2e-tests/docker-compose.yml down
 ```
 
 Both curls (`api.test.local`, `web2.test.local`) must return `UPSTREAM-OK`.
+
+## Hot-reload smoke
+
+Edit `e2e-tests/tunnels.json` (add a third tunnel, or remove one), then:
+
+```sh
+docker kill --signal=HUP mygrok-e2e-client-1
+docker compose -f e2e-tests/docker-compose.yml logs client   # -> "reload applied" {added/removed/replaced/kept}
+```
+
+The new tunnel must come up (`UPSTREAM-OK` through it) while the untouched
+tunnels keep serving. A broken `tunnels.json` must log `reload skipped:
+invalid config` and change nothing. Restore the original two-tunnel file
+afterwards.

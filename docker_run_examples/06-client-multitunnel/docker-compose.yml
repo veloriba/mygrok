@@ -14,9 +14,10 @@
 # mounted tunnels.json keeps its server/token fields empty on purpose, so
 # the file stays safe to commit.
 #
-# To add or remove tunnels: edit tunnels.json, then
-#   docker compose restart
-# (the file is read at container start; a plain `up -d` will not restart it).
+# To add or remove tunnels: edit tunnels.json, then hot-reload the
+# container (unchanged tunnels keep their connections):
+#   docker kill --signal=HUP mygrok-example-06-mygrok-1
+# (a plain `docker compose restart` also works but drops every tunnel).
 #
 # The mygrok image must exist locally: build it once from the repo root
 # (see ../README.md) or `docker load` a tarball from `make docker-save`.

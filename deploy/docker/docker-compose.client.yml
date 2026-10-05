@@ -63,6 +63,10 @@ services:
   #     network_mode: host
   #     restart: unless-stopped
   #
+  #   Edit tunnels.json, then hot-reload without dropping the running
+  #   tunnels: `docker kill --signal=HUP <container>` (or
+  #   `docker exec <container> mygrok reload -f /etc/mygrok/tunnels.json`).
+  #
   # tunnels.json example -- server/token stay empty, the container's
   # MYGROK_SERVER/MYGROK_TOKEN environment (this .env) supplies them, so the
   # file never contains secrets:

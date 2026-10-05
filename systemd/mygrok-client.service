@@ -16,7 +16,11 @@ Environment=MYGROK_SERVER={{SERVER}}
 Environment=MYGROK_TOKEN={{TOKEN}}
 ExecStart={{BINDIR}}/mygrok-client --no-tui {{PROTOCOL}} {{PORT}} {{SUBDOMAIN}} --public-port {{PUBLIC_PORT}}
 # Multi-tunnel alternative: one process, all tunnels from one config file
-# (ExecStart={{BINDIR}}/mygrok-client up --config /etc/mygrok/tunnels.json --no-tui)
+# (ExecStart={{BINDIR}}/mygrok-client up --config /etc/mygrok/tunnels.json --no-tui
+#  plus hot reload on config edits:
+#  PIDFile=/run/mygrok.pid
+#  ExecStart=... up --config /etc/mygrok/tunnels.json --no-tui --pid-file /run/mygrok.pid
+#  ExecReload={{BINDIR}}/mygrok-client reload -f /etc/mygrok/tunnels.json --pid-file /run/mygrok.pid)
 Restart=always
 RestartSec=5
 SyslogIdentifier=mygrok-{{SUBDOMAIN}}

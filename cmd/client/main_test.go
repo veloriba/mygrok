@@ -1,6 +1,8 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
 	"reflect"
 	"testing"
 
@@ -179,5 +181,93 @@ func TestSelectTunnelsLegacyOnly(t *testing.T) {
 	}
 	if c.Insecure {
 		t.Error("legacy https scheme must not force --insecure")
+	}
+}
+
+func writeTempConfig(t *testing.T, data string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "tunnels.json")
+	if err := os.WriteFile(path, []byte(data), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	return path
+}
+
+func TestLoadAndBuildValid(t *testing.T) {
+	path := writeTempConfig(t, `{
+		"server": "cfg:7000", "token": "cfgtok",
+		"tunnels": [
+			{"name": "api", "protocol": "http", "port": 3000, "subdomain": "api"},
+			{"name": "ssh", "protocol": "tcp", "port": 22, "subdomain": "ssh", "public_port": 2222}
+		]
+	}`)
+	g := globalOpts{localHost: "127.0.0.1", flushInterval: -1} // server/token come from the config
+	cfg, clients, err := loadAndBuild(path, g)
+	if err != nil {
+		t.Fatalf("loadAndBuild: %v", err)
+	}
+	if len(cfg.Tunnels) != 2 || len(clients) != 2 {
+		t.Fatalf("clients = %d, want 2", len(clients))
+	}
+	if clients[0].ServerAddr != "cfg:7000" || clients[0].Token != "cfgtok" {
+		t.Errorf("config server/token not applied: %q %q", clients[0].ServerAddr, clients[0].Token)
+	}
+}
+
+func TestLoadAndBuildInvalid(t *testing.T) {
+	cases := []struct {
+		name string
+		data string
+		g    globalOpts
+	}{
+		{"bad json", `{"tunnels": [`, testGlobals()},
+		{"no token", `{"server": "s:1", "tunnels": [{"port": 1, "subdomain": "a"}]}`,
+			globalOpts{serverAddr: "s:1", localHost: "127.0.0.1"}},
+		{"no server", `{"token": "t", "tunnels": [{"port": 1, "subdomain": "a"}]}`,
+			globalOpts{token: "t", localHost: "127.0.0.1"}},
+		{"unknown protocol", `{"server": "s:1", "token": "t", "tunnels": [{"port": 1, "protocol": "sctp", "subdomain": "a"}]}`, testGlobals()},
+		{"missing port", `{"server": "s:1", "token": "t", "tunnels": [{"subdomain": "a"}]}`, testGlobals()},
+		{"duplicate subdomain", `{"server": "s:1", "token": "t", "tunnels": [
+			{"port": 1, "subdomain": "dup"}, {"port": 2, "subdomain": "dup"}]}`, testGlobals()},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, _, err := loadAndBuild(writeTempConfig(t, tc.data), tc.g); err == nil {
+				t.Fatal("expected validation error")
+			}
+		})
+	}
+}
+
+func TestLoadAndBuildMissingFile(t *testing.T) {
+	if _, _, err := loadAndBuild(filepath.Join(t.TempDir(), "nope.json"), testGlobals()); err == nil {
+		t.Fatal("missing config file must fail")
+	}
+}
+
+func TestPidFileRoundTrip(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "sub", "mygrok.pid")
+	if err := writePidFile(path); err != nil {
+		t.Fatalf("writePidFile: %v", err)
+	}
+	pid, err := readPidFile(path)
+	if err != nil {
+		t.Fatalf("readPidFile: %v", err)
+	}
+	if pid != os.Getpid() {
+		t.Errorf("pid = %d, want %d", pid, os.Getpid())
+	}
+	removePidFile(path)
+	if _, err := readPidFile(path); err == nil {
+		t.Error("pidfile must be gone after remove")
+	}
+}
+
+func TestReadPidFileMalformed(t *testing.T) {
+	for _, body := range []string{"", "abc", "-5", "0"} {
+		path := writeTempConfig(t, body) // reuse writer: any file content works
+		if _, err := readPidFile(path); err == nil {
+			t.Errorf("body %q: expected error", body)
+		}
 	}
 }

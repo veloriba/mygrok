@@ -24,11 +24,14 @@ you prefer.
 **Adding or removing a tunnel:** edit `tunnels.json` — each entry supports
 `name`, `protocol` (`http|https|tcp|udp`), `port`, `subdomain`, optional
 `public_port`, `insecure`, `set_headers`, and a per-tunnel `local_host`
-override — then restart the container:
+override — then hot-reload the container (unchanged tunnels keep serving):
 
 ```bash
-docker compose restart
+docker kill --signal=HUP mygrok-example-06-mygrok-1
+# or: docker exec mygrok-example-06-mygrok-1 mygrok reload -f /etc/mygrok/tunnels.json
 ```
+
+(`docker compose restart` works too, but drops every tunnel for a moment.)
 
 (Equivalent one-off `docker run`, Linux or Docker Desktop ≥ 4.29 with host
 networking:

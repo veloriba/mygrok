@@ -177,9 +177,7 @@ func TestRenderSingleUnchanged(t *testing.T) {
 }
 
 func TestUILoopShutdown(t *testing.T) {
-	m := &TunnelManager{clients: []*TunnelClient{
-		NewTunnelClient(Config{Subdomain: "a", LocalAddr: "127.0.0.1:39999"}),
-	}}
+	m := &TunnelManager{tunnels: []*managedTunnel{{client: NewTunnelClient(Config{Subdomain: "a", LocalAddr: "127.0.0.1:39999"})}}}
 	done := make(chan struct{})
 	quit := func() {}
 	finished := make(chan struct{})

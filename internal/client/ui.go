@@ -95,8 +95,8 @@ func (m *TunnelManager) uiLoop(done <-chan struct{}, quit func()) {
 	defer stop()
 	auto := !keysEnabled()
 
-	n := len(m.clients)
 	sel := 0
+	n := 0
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
 
@@ -131,9 +131,12 @@ func (m *TunnelManager) uiLoop(done <-chan struct{}, quit func()) {
 		}
 
 		now := time.Now()
-		snaps := make([]ClientSnapshot, n)
-		for i, cl := range m.clients {
-			snaps[i] = cl.Snapshot()
+		// Re-read the tunnel set every frame: a hot reload can add, replace,
+		// or remove tunnels between frames.
+		snaps := m.snapshots()
+		n = len(snaps)
+		if sel >= n {
+			sel = 0
 		}
 		if auto {
 			sel = autoSelect(snaps)

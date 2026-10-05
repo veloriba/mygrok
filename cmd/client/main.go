@@ -25,6 +25,7 @@ var (
 	noTUI           bool
 	publicPort      int
 	configFile      string
+	pidFile         string
 	logLevel        string
 	logFormat       string
 	logVerbose      bool
@@ -90,6 +91,101 @@ func waitForSignal() <-chan struct{} {
 		close(done)
 	}()
 	return done
+}
+
+// resolveConfigPath returns the explicit --config path, or the default
+// config.json next to the binary when it exists.
+func resolveConfigPath() (string, error) {
+	if configFile != "" {
+		return configFile, nil
+	}
+	defaultCfg := filepath.Join(findBinaryDir(), "config.json")
+	if _, err := os.Stat(defaultCfg); err == nil {
+		return defaultCfg, nil
+	}
+	return "", fmt.Errorf("no config file: use --config <file> (or config.json next to the binary)")
+}
+
+// loadAndBuild runs the full startup validation chain for a config file:
+// parse, resolve server/token (flags/env win, config fills the gaps), build
+// the tunnel clients, and check the set (duplicate subdomains). Shared by
+// the root/up commands, `validate`, `reload`, and the SIGHUP handler, so
+// what `validate` accepts is exactly what startup and reload accept.
+func loadAndBuild(path string, g globalOpts) (*ProfileConfig, []*client.TunnelClient, error) {
+	cfg, err := loadConfig(path)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to read config %s: %w", path, err)
+	}
+	if g.token == "" && cfg.Token != "" {
+		g.token = cfg.Token
+	}
+	if g.serverAddr == "" && cfg.Server != "" {
+		g.serverAddr = cfg.Server
+	}
+	if g.token == "" {
+		return nil, nil, fmt.Errorf("token is required in config or via --token")
+	}
+	if g.serverAddr == "" {
+		return nil, nil, fmt.Errorf("server is required in config or via --server")
+	}
+	clients, err := selectTunnels(cfg, g)
+	if err != nil {
+		return nil, nil, err
+	}
+	if _, err := client.NewManager(clients, true); err != nil {
+		return nil, nil, err
+	}
+	return cfg, clients, nil
+}
+
+// watchReload re-reads the config file on SIGHUP and hot-swaps the tunnel
+// set (nginx-style): new tunnels start, removed tunnels stop, changed
+// tunnels restart, unchanged tunnels keep their live connections. An invalid
+// config is reported and changes nothing -- the running tunnels keep
+// serving. Logging is --no-tui only: stderr writes would corrupt the
+// dashboard, which shows the new tunnel set on the next frame anyway.
+func watchReload(m *client.TunnelManager, path string, g globalOpts) {
+	ch := make(chan os.Signal, 1)
+	notifyReload(ch)
+	go func() {
+		for range ch {
+			if path == "" {
+				if g.noTUI {
+					slog.Warn("reload ignored: process was started without a config file")
+				}
+				continue
+			}
+			_, clients, err := loadAndBuild(path, g)
+			if err != nil {
+				if g.noTUI {
+					slog.Error("reload skipped: invalid config", "path", path, "err", err.Error())
+				}
+				continue
+			}
+			rep, err := m.Reload(clients)
+			if err != nil {
+				if g.noTUI {
+					slog.Error("reload failed", "err", err.Error())
+				}
+				continue
+			}
+			if g.noTUI {
+				slog.Info("reload applied", "added", rep.Added, "removed", rep.Removed, "replaced", rep.Replaced, "kept", rep.Kept)
+			}
+		}
+	}()
+}
+
+// writePidfileAndRun records the PID (so `mygrok reload` can find this
+// process), removes the pidfile on exit, and runs the manager.
+func writePidfileAndRun(m *client.TunnelManager, path string, g globalOpts) {
+	watchReload(m, path, g)
+	if err := writePidFile(pidFile); err != nil {
+		slog.Warn("could not write pidfile", "path", pidFile, "err", err.Error(), "hint", "trigger reload with `docker kill --signal=HUP <container>` or pick a writable --pid-file")
+	} else {
+		defer removePidFile(pidFile)
+	}
+	m.Start(waitForSignal())
 }
 
 // globalOpts are the per-run defaults shared by all tunnels; per-tunnel spec
@@ -266,45 +362,14 @@ func main() {
 		Use:   "mygrok",
 		Short: "mygrok is a minimal ngrok clone",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			binDir := findBinaryDir()
-
 			if configFile == "" {
-				defaultCfg := filepath.Join(binDir, "config.json")
+				defaultCfg := filepath.Join(findBinaryDir(), "config.json")
 				if _, err := os.Stat(defaultCfg); err == nil {
 					configFile = defaultCfg
 				}
 			}
-
-			var cfg *ProfileConfig
-			if configFile != "" {
-				c, err := loadConfig(configFile)
-				if err != nil {
-					return fmt.Errorf("failed to read config %s: %w", configFile, err)
-				}
-				cfg = c
-			}
-
-			if cfg == nil {
+			if configFile == "" {
 				return cmd.Usage()
-			}
-
-			scheme := cfg.Scheme
-			if scheme == "" {
-				scheme = "http"
-			}
-
-			if token == "" && cfg.Token != "" {
-				token = cfg.Token
-			}
-			if serverAddr == "" && cfg.Server != "" {
-				serverAddr = cfg.Server
-			}
-
-			if token == "" {
-				return fmt.Errorf("token is required in config or via --token")
-			}
-			if serverAddr == "" {
-				return fmt.Errorf("server is required in config or via --server")
 			}
 
 			flushIntervalDur, err := parseFlushInterval(flushInterval)
@@ -313,14 +378,17 @@ func main() {
 			}
 			g := runOpts(flushIntervalDur)
 
-			legacy := len(cfg.Tunnels) == 0
-			clients, err := selectTunnels(cfg, g)
+			cfg, clients, err := loadAndBuild(configFile, g)
 			if err != nil {
 				return err
 			}
-			if legacy && noTUI {
+			if len(cfg.Tunnels) == 0 && noTUI {
+				scheme := cfg.Scheme
+				if scheme == "" {
+					scheme = "http"
+				}
 				localAddr := fmt.Sprintf("%s://%s:%d", scheme, localHost, cfg.Port)
-				host, _, _ := net.SplitHostPort(serverAddr)
+				host, _, _ := net.SplitHostPort(g.serverAddr)
 				publicURL := fmt.Sprintf("%s.%s:%d", cfg.Subdomain, host, 443)
 				slog.Info("starting tunnel", "url", publicURL, "local", localAddr)
 			}
@@ -329,7 +397,7 @@ func main() {
 			if err != nil {
 				return err
 			}
-			m.Start(waitForSignal())
+			writePidfileAndRun(m, configFile, g)
 			return nil
 		},
 	}
@@ -338,6 +406,7 @@ func main() {
 	rootCmd.PersistentFlags().BoolVarP(&noTUI, "no-tui", "", false, "run without TUI dashboard")
 	rootCmd.PersistentFlags().IntVar(&publicPort, "public-port", 0, "requested public port for tcp/udp tunnels (0 = auto-assign)")
 	rootCmd.PersistentFlags().StringVarP(&configFile, "config", "f", "", "path to profile config file (default: config.json next to binary)")
+	rootCmd.PersistentFlags().StringVar(&pidFile, "pid-file", filepath.Join(os.TempDir(), "mygrok.pid"), "pid file written by the running process (empty disables), read by the reload command")
 	rootCmd.PersistentFlags().StringVar(&logLevel, "log-level", getenvDefault("MYGROK_LOG_LEVEL", "info"), "log level: debug|info|warn|error (service mode)")
 	rootCmd.PersistentFlags().StringVar(&logFormat, "log-format", getenvDefault("MYGROK_LOG_FORMAT", "text"), "log format: text|json (service mode)")
 	rootCmd.PersistentFlags().BoolVarP(&logVerbose, "verbose", "v", false, "verbose (debug) logging; equivalent to --log-level=debug")
@@ -415,33 +484,10 @@ from positional <protocol> <port> <subdomain> triples:
 			if configFile != "" && len(args) > 0 {
 				return fmt.Errorf("cannot combine --config with positional tunnel triples")
 			}
-			if configFile == "" {
-				defaultCfg := filepath.Join(findBinaryDir(), "config.json")
-				if _, err := os.Stat(defaultCfg); err == nil {
-					configFile = defaultCfg
+			if configFile == "" && len(args) == 0 {
+				if p, err := resolveConfigPath(); err == nil {
+					configFile = p
 				}
-			}
-
-			var cfg *ProfileConfig
-			if configFile != "" {
-				c, err := loadConfig(configFile)
-				if err != nil {
-					return fmt.Errorf("failed to read config %s: %w", configFile, err)
-				}
-				cfg = c
-				if token == "" && cfg.Token != "" {
-					token = cfg.Token
-				}
-				if serverAddr == "" && cfg.Server != "" {
-					serverAddr = cfg.Server
-				}
-			}
-
-			if token == "" {
-				return fmt.Errorf("token is required in config or via --token")
-			}
-			if serverAddr == "" {
-				return fmt.Errorf("server is required in config or via --server")
 			}
 
 			flushIntervalDur, err := parseFlushInterval(flushInterval)
@@ -450,36 +496,114 @@ from positional <protocol> <port> <subdomain> triples:
 			}
 			g := runOpts(flushIntervalDur)
 
-			var (
-				clients  []*client.TunnelClient
-				buildErr error
-			)
+			var clients []*client.TunnelClient
 			switch {
-			case cfg != nil:
-				clients, buildErr = selectTunnels(cfg, g)
+			case configFile != "":
+				_, clients, err = loadAndBuild(configFile, g)
+				if err != nil {
+					return err
+				}
 			case len(args) > 0:
+				if token == "" {
+					return fmt.Errorf("token is required in config or via --token")
+				}
+				if serverAddr == "" {
+					return fmt.Errorf("server is required in config or via --server")
+				}
 				specs, perr := parseTriples(args)
 				if perr != nil {
 					return perr
 				}
-				clients, buildErr = buildClients(specs, g)
+				clients, err = buildClients(specs, g)
+				if err != nil {
+					return err
+				}
 			default:
 				return fmt.Errorf("no tunnels specified: use --config <file> or <protocol> <port> <subdomain> triples")
-			}
-			if buildErr != nil {
-				return buildErr
 			}
 
 			m, err := client.NewManager(clients, noTUI)
 			if err != nil {
 				return err
 			}
-			m.Start(waitForSignal())
+			writePidfileAndRun(m, configFile, g)
 			return nil
 		},
 	}
 
-	rootCmd.AddCommand(httpCmd, httpsCmd, tcpCmd, udpCmd, upCmd)
+	// Validate command: check a config file without starting anything.
+	validateCmd := &cobra.Command{
+		Use:   "validate",
+		Short: "Validate the config file without connecting",
+		Long: `Parse and check the config file (tunnel specs, protocols, ports,
+duplicate subdomains, server/token resolution) without starting tunnels
+or contacting the server. Exits non-zero when the config is invalid.`,
+		Args:          cobra.NoArgs,
+		SilenceUsage:  true,
+		SilenceErrors: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			path, err := resolveConfigPath()
+			if err != nil {
+				return err
+			}
+			flushIntervalDur, err := parseFlushInterval(flushInterval)
+			if err != nil {
+				return fmt.Errorf("invalid --flush-interval %q: %w", flushInterval, err)
+			}
+			_, clients, err := loadAndBuild(path, runOpts(flushIntervalDur))
+			if err != nil {
+				return fmt.Errorf("config %s is invalid: %w", path, err)
+			}
+			out := cmd.OutOrStdout()
+			fmt.Fprintf(out, "%s is valid: %d tunnel(s)\n", path, len(clients))
+			for _, c := range clients {
+				fmt.Fprintf(out, "  %-16s %-4s subdomain=%-12s -> %s\n", c.Name, c.Protocol, c.Subdomain, c.LocalAddr)
+			}
+			return nil
+		},
+	}
+
+	// Reload command: validate, then signal the running process (SIGHUP).
+	reloadCmd := &cobra.Command{
+		Use:   "reload",
+		Short: "Hot-reload the tunnels of a running process",
+		Long: `Validate the config file, then send SIGHUP to the running process found
+via --pid-file. The process re-reads its own config and applies the diff:
+new tunnels start, removed tunnels stop, changed tunnels restart, and
+unchanged tunnels keep serving without dropping connections. An invalid
+config aborts the reload; the running tunnels keep serving.
+
+In Docker prefer: docker kill --signal=HUP <container>`,
+		Args:          cobra.NoArgs,
+		SilenceUsage:  true,
+		SilenceErrors: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			out := cmd.OutOrStdout()
+			if path, err := resolveConfigPath(); err == nil {
+				flushIntervalDur, ferr := parseFlushInterval(flushInterval)
+				if ferr != nil {
+					return fmt.Errorf("invalid --flush-interval %q: %w", flushInterval, ferr)
+				}
+				if _, _, verr := loadAndBuild(path, runOpts(flushIntervalDur)); verr != nil {
+					return fmt.Errorf("config %s is invalid, reload aborted: %w", path, verr)
+				}
+				fmt.Fprintf(out, "config %s is valid\n", path)
+			} else {
+				fmt.Fprintf(out, "no config file to validate (%v); the running process re-validates its own config on reload\n", err)
+			}
+			pid, err := readPidFile(pidFile)
+			if err != nil {
+				return fmt.Errorf("%w (is the client running with --pid-file %s? in Docker use `docker kill --signal=HUP <container>`)", err, pidFile)
+			}
+			if err := sendReloadSignal(pid); err != nil {
+				return err
+			}
+			fmt.Fprintf(out, "reload signal sent to pid %d\n", pid)
+			return nil
+		},
+	}
+
+	rootCmd.AddCommand(httpCmd, httpsCmd, tcpCmd, udpCmd, upCmd, validateCmd, reloadCmd)
 
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Println(err)

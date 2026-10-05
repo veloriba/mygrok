@@ -24,8 +24,10 @@ Run your own tunnel server on a VPS and expose local development servers (Next.j
 - **WebSocket & HMR support**: works perfectly with Next.js, Webpack HMR, and real-time apps (connection hijack + raw splice).
 - **Streaming (SSE) friendly**: no `WriteTimeout` on the proxy path — LLM token streams are never cut off.
 - **TCP & UDP tunnels**: auto-assigned public ports (default range 20000–20099) for SSH, RDP, game servers, anything.
+- **Multi-tunnel**: one process/container runs the whole tunnel set of a project from a single `tunnels.json` (or `<proto> <port> <sub>` triples) — N registrations, one reconnect loop each, one dashboard.
+- **Hot reload**: `mygrok validate` + `mygrok reload` (nginx-style SIGHUP) apply config edits in place — new tunnels start, removed stop, and untouched tunnels keep their live connections.
 - **Wildcard SSL support**: full HTTPS via Let's Encrypt wildcard certificates (DNS-01).
-- **TUI dashboard**: real-time request log, traffic counters, and tunnel URLs.
+- **TUI dashboard**: real-time request log, traffic counters, and tunnel URLs; in multi-tunnel mode a table of all tunnels plus a detail panel, navigable with `j`/`k` (select), `r` (refresh), `q` (quit).
 - **Resilient**: clients auto-reconnect with exponential backoff + jitter; the server tears tunnels down deterministically so a wedged session can't leak.
 - **Observability**: loopback-only `/stats` + `/healthz` endpoints with live tunnel, in-flight, and runtime metrics.
 - **Structured logging**: `log/slog` with levels and fields (`--log-level`, `--log-format json`) on both client and server.
@@ -150,6 +152,8 @@ make build && ./bin/mygrok http 3000 my-app
 
 The client TUI shows the public URL as soon as the tunnel is up.
 
+**Many tunnels at once.** `mygrok up -f tunnels.json` (or `mygrok up http 3000 api tcp 22 ssh`) runs every tunnel of a project in one process; `mygrok validate` / `mygrok reload` apply config edits without restarting — see [Multi-tunnel & hot reload](#multi-tunnel--hot-reload).
+
 ### Per-project tunnels: the `task` CLI
 
 For "one tunnel per project" setups, the `task` binary scaffolds and manages a self-contained `mygrok/` folder inside any project directory:
@@ -169,7 +173,7 @@ mygrok-task up|down|status|logs ~/dev/myapp
 
 `add --multi <dir>` scaffolds a **single container that runs all tunnels** of the project from `<dir>/mygrok/tunnels.json` (project `mygrok-<dir-basename>`, container `mygrok_<dir-basename>`); every later `add --multi` appends another tunnel spec to that file (duplicate subdomains are refused), so one directory can expose many tunnels with one container. Single-mode and multi-mode directories can't be mixed — `mygrok-task` detects both conflicts.
 
-### Multi-tunnel: one process, many tunnels
+### Multi-tunnel & hot reload
 
 The client can run **every tunnel of a project in one process**: point `mygrok up` at a config file, or pass `<protocol> <port> <subdomain>` triples:
 
@@ -193,6 +197,27 @@ Minimal `tunnels.json` (each entry supports `name`, `protocol` `http|https|tcp|u
 
 N tunnels = N server-side registrations, but all in one process — one container (see [`docker_run_examples/06-client-multitunnel`](docker_run_examples/06-client-multitunnel/)) or one systemd unit (see the commented alternative in `systemd/mygrok-client.service`). `mygrok-task add --multi <dir> --port N --sub name` scaffolds the Docker variant for you.
 
+#### Hot reload: `validate` and `reload`
+
+Edit `tunnels.json` without restarting the process — two commands, nginx-style:
+
+```bash
+mygrok validate -f tunnels.json   # check the config without connecting (exit 0/1)
+mygrok reload   -f tunnels.json   # validate, then SIGHUP the running process
+```
+
+The running process re-reads its own config on SIGHUP and applies the diff: new tunnels start, removed tunnels stop, changed tunnels restart — and **unchanged tunnels keep their live connections**. An invalid config is rejected at both layers: `reload` refuses to send the signal, and a bare `kill -HUP` logs `reload skipped: invalid config` while the running tunnels keep serving. The running process records its PID in `--pid-file` (default: `mygrok.pid` in the system temp dir) so `reload` can find it.
+
+In Docker no pidfile is needed — signal the container directly:
+
+```bash
+docker kill --signal=HUP mygrok
+# or, using the in-container pidfile:
+docker exec mygrok mygrok reload -f /etc/mygrok/tunnels.json
+```
+
+For systemd add `ExecReload=` to the unit (see `systemd/mygrok-client.service`). Bare-Windows processes have no SIGHUP — on Windows hosts run the client in Docker.
+
 ### Runnable examples
 
 [`docker_run_examples/`](docker_run_examples/) contains self-contained, copy-paste examples — client (http / tcp / multi-service) and server (with nginx / minimal), each with its own compose file, `.env.example`, and a `docker run` one-liner equivalent:
@@ -204,7 +229,7 @@ N tunnels = N server-side registrations, but all in one process — one containe
 | `03-client-multi` | several tunnels on one host (host network + shared docker network) |
 | `04-server-nginx` | full server stack: `mygrok-server` + nginx TLS front |
 | `05-server-minimal` | server without a TLS front (tcp/udp tunnels, private networks) |
-| `06-client-multitunnel` | one container runs all tunnels from `tunnels.json` (multi-tunnel mode) |
+| `06-client-multitunnel` | one container runs all tunnels from `tunnels.json` (multi-tunnel mode + hot reload via `docker kill --signal=HUP`) |
 
 ## 🧠 Use Cases
 
@@ -241,7 +266,7 @@ ssh -p 2222 your-user@yourdomain.com
 
 The same works for RDP, VNC, game servers, or any raw TCP service; UDP tunnels use the identical command with `udp`.
 
-### Dev preview with hot reload
+### Dev preview: WebSockets & HMR
 
 ```bash
 docker run --rm --network host -e MYGROK_TOKEN=... mygrok:0.3.0 \
@@ -252,7 +277,20 @@ WebSockets and HMR (Next.js, Vite) work out of the box — share `https://previe
 
 ### Many services, one host
 
-Run one tunnel container per service (see `docker_run_examples/03-client-multi`): `docker compose ps` becomes your fleet dashboard, and each tunnel reconnects and restarts independently.
+Two styles, pick per host:
+
+- **One container per tunnel** (see `docker_run_examples/03-client-multi`): `docker compose ps` becomes your fleet dashboard, and each tunnel reconnects and restarts independently.
+- **One container for all tunnels** (see `docker_run_examples/06-client-multitunnel`): a single `mygrok up` process registers every tunnel from one `tunnels.json`; edit the file and hot-reload — untouched tunnels never drop:
+
+  ```bash
+  docker run -d --name mygrok --network host \
+    -v "$PWD/tunnels.json:/etc/mygrok/tunnels.json:ro" \
+    -e MYGROK_SERVER=yourdomain.com:7000 -e MYGROK_TOKEN=your-secret-token \
+    mygrok:0.3.0 mygrok up --config /etc/mygrok/tunnels.json --no-tui --log-format json
+
+  # later: edit tunnels.json, then
+  docker kill --signal=HUP mygrok
+  ```
 
 <p align="center">
   <img src="docs/img/composeps.png" alt="docker compose ps with mygrok tunnels" width="720" />
@@ -276,11 +314,14 @@ Run one tunnel container per service (see `docker_run_examples/03-client-multi`)
 
 ### Client
 
+**Commands:** `http` / `https` / `tcp` / `udp` (single tunnel), `up` (N tunnels from a config file or `<proto> <port> <subdomain>` triples), `validate` (check the config without connecting), `reload` (validate, then SIGHUP the running process). Running with no subcommand reads `config.json` next to the binary (legacy single-tunnel profile; a `"tunnels"` list works there too).
+
 | Flag | Environment Variable | Description |
 | --- | --- | --- |
 | `--server` | `MYGROK_SERVER` | **Required**. Server address (e.g. `yourdomain.com:7000`) |
 | `--token` | `MYGROK_TOKEN` | **Required**. Authentication secret token |
-| `--config` | — | Path to a profile `config.json` (default: `config.json` next to the binary) |
+| `--config` | — | Path to a profile config file (`tunnels.json` / `config.json`; default: `config.json` next to the binary) |
+| `--pid-file` | — | PID file written by `up`/root (default `mygrok.pid` in the system temp dir; empty disables), read by `mygrok reload` |
 | `--public-port` | — | Requested public port for `tcp`/`udp` tunnels (`0` = auto-assign) |
 | `--no-tui` | — | Run headless; logs lifecycle events to stderr (for systemd/journal/compose) |
 | `-v`, `--verbose` | — | Debug logging (equivalent to `--log-level debug`) |
@@ -365,7 +406,7 @@ Rough figures measured on real traffic (an idle server fronting 6 tunnels):
 | Component | Resident (RSS) | Notes |
 | --- | --- | --- |
 | `mygrok-server` | ~9 MB | Single static Go binary, ~38 goroutines at rest. Grows by a few MB under concurrent streams, then frees on idle. |
-| `mygrok` (client) | ~8–9 MB each | One process per tunnel; negligible CPU between requests. |
+| `mygrok` (client) | ~8–9 MB each | One process per tunnel (or one `up` process for many tunnels); negligible CPU between requests. |
 
 - Both are **statically linked Go binaries** with no runtime dependencies; the Docker image is a `scratch`-based ~10 MB layer on top of the Go toolchain build.
 - `top`/`ps` will show ~1.2 GB **VIRT/VSZ** — that's Go's reserved **virtual address space** (arena hint), **not** physical memory. Watch **RSS**, not VIRT.
@@ -398,6 +439,8 @@ Rough figures measured on real traffic (an idle server fronting 6 tunnels):
 | LLM/SSE streams arrive in bursts instead of token-by-token | Response buffering in an intermediate proxy | Ensure `proxy_buffering off` in your nginx config (included in the provided templates) |
 | `handshake decode failed` spam in server log | Internet scanners hitting the public control port | Harmless — connections are dropped. Optionally rate-limit/allow-list port 7000 in the firewall |
 | Client never reconnects fast enough | Frequent transient drops | Raise/fall `MYGROK_RECONNECT_SEC`; watch `attempt`/`reconnect_in` in logs |
+| `reload` does nothing / "no process" | Wrong pidfile, or the process was started without a config file | Pass the same `-f`/`--pid-file` the running process uses; in Docker prefer `docker kill --signal=HUP <container>` |
+| Reload silently not applied (TUI mode) | Invalid config — reload is a no-op by design | Run `mygrok validate -f <file>` to see the error; in `--no-tui` mode the log shows `reload skipped: invalid config` |
 | Can't reach `/stats` from remote | Loopback-only by design | Set `-admin-token`, or `ssh -L 7001:127.0.0.1:7001 your-vps` and curl locally |
 
 ## 🤝 Contributing
