@@ -19,16 +19,16 @@ LDFLAGS=-ldflags "-X github.com/veloriba/mygrok/internal/version.Version=$(VERSI
 build: build-server build-client build-task
 
 build-task:
-	go build $(LDFLAGS) -o bin/mygrok-task cmd/task/main.go
+	go build $(LDFLAGS) -o bin/mygrok-task ./cmd/task
 
 test:
 	go test -v ./...
 
 build-server:
-	GOOS=linux GOARCH=amd64 go build $(LDFLAGS) -o bin/mygrok-server cmd/server/main.go
+	GOOS=linux GOARCH=amd64 go build $(LDFLAGS) -o bin/mygrok-server ./cmd/server
 
 build-client:
-	go build $(LDFLAGS) -o bin/mygrok cmd/client/main.go
+	go build $(LDFLAGS) -o bin/mygrok ./cmd/client
 
 clean:
 	rm -rf bin/
@@ -132,7 +132,7 @@ docker-server-logs:
 # Build the `mygrok-task` CLI (scaffold/manage per-project docker compose tunnels).
 # Install to your PATH: cp bin/mygrok-task /usr/local/bin/
 task:
-	go build $(LDFLAGS) -o bin/mygrok-task cmd/task/main.go
+	go build $(LDFLAGS) -o bin/mygrok-task ./cmd/task
 
 
 # --- Windows host client deployment targets ---
@@ -142,7 +142,7 @@ WIN_BIN := $(WIN_DIR)/mygrok.exe
 WIN_SCHTASK ?= mygrok-client
 
 win-client-build:
-	GOOS=windows GOARCH=amd64 go build $(LDFLAGS) -o bin/mygrok.exe cmd/client/main.go
+	GOOS=windows GOARCH=amd64 go build $(LDFLAGS) -o bin/mygrok.exe ./cmd/client
 
 win-client-install: win-client-build
 	@[ -n "$(WIN_HOST)" ] && [ -n "$(WIN_USER)" ] && [ -n "$(WIN_DIR)" ] || { echo "ERROR: WIN_HOST/WIN_USER/WIN_DIR not set (config.mk)" >&2; exit 1; }

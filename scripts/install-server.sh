@@ -105,7 +105,7 @@ echo "==> Building $BIN_NAME (linux/amd64, v$(cat "$REPO_ROOT/VERSION"))..."
     mkdir -p bin
     GOOS=linux GOARCH=amd64 go build \
         -ldflags "-X github.com/veloriba/mygrok/internal/version.Version=$(cat VERSION)" \
-        -o "bin/$BIN_NAME" cmd/server/main.go
+        -o "bin/$BIN_NAME" ./cmd/server
 )
 
 echo "==> Uploading to $SSH_HOST:$BINDIR/$BIN_NAME.new ..."
